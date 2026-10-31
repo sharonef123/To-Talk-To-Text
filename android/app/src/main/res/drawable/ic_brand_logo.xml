@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="96dp"
+    android:height="96dp"
+    android:viewportWidth="96"
+    android:viewportHeight="96">
+    <!-- outer gear-dial ring -->
+    <path
+        android:pathData="M48,6 A42,42 0 1 1 47.9,6"
+        android:strokeColor="#4C8BF5"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+    <!-- gear teeth ticks -->
+    <path
+        android:pathData="M48,2v10 M48,84v10 M2,48h10 M84,48h10 M14.9,14.9l7.1,7.1 M74,74l7.1,7.1 M14.9,81.1l7.1,-7.1 M74,22l7.1,-7.1"
+        android:strokeColor="#4C8BF5"
+        android:strokeWidth="4"
+        android:strokeLineCap="round" />
+    <!-- mic body -->
+    <path
+        android:pathData="M48,54c6.63,0 12,-5.37 12,-12V26c0,-6.63 -5.37,-12 -12,-12s-12,5.37 -12,12v16C36,48.63 41.37,54 48,54z"
+        android:fillColor="#E6E8EB" />
+    <path
+        android:pathData="M68,42c0,11.05 -8.95,20 -20,20s-20,-8.95 -20,-20h-6c0,13.08 9.66,23.89 22,25.72V78h8V67.72C64.34,65.89 74,55.08 74,42H68z"
+        android:fillColor="#E6E8EB" />
+</vector>

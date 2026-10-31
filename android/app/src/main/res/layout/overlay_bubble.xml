@@ -11,18 +11,18 @@
     android:layout_width="wrap_content"
     android:layout_height="wrap_content">
 
-    <!-- Compact state: ~48dp circular bubble, draggable, snaps to an edge. -->
+    <!-- Compact state: 48dp circular bubble, draggable, snaps to an edge. -->
     <FrameLayout
         android:id="@+id/compactBubble"
-        android:layout_width="52dp"
-        android:layout_height="52dp"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
         android:background="@drawable/bubble_circle_bg"
         android:elevation="6dp">
 
         <ImageView
             android:id="@+id/compactIcon"
-            android:layout_width="28dp"
-            android:layout_height="28dp"
+            android:layout_width="26dp"
+            android:layout_height="26dp"
             android:layout_gravity="center"
             android:src="@mipmap/ic_launcher"
             android:contentDescription="@string/bubble_compact_desc" />
@@ -88,7 +88,7 @@
             android:layout_weight="1"
             android:layout_marginStart="10dp"
             android:layout_marginEnd="6dp"
-            android:maxWidth="180dp"
+            android:maxWidth="110dp"
             android:maxLines="2"
             android:ellipsize="end"
             android:textSize="12sp"
@@ -97,29 +97,59 @@
 
         <FrameLayout
             android:id="@+id/copyButton"
-            android:layout_width="34dp"
-            android:layout_height="34dp"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
             android:background="@drawable/mic_circle_bg">
 
             <ImageView
-                android:layout_width="18dp"
-                android:layout_height="18dp"
+                android:layout_width="17dp"
+                android:layout_height="17dp"
                 android:layout_gravity="center"
                 android:src="@drawable/ic_copy"
                 android:contentDescription="@string/copy_desc" />
         </FrameLayout>
 
         <FrameLayout
-            android:id="@+id/collapseButton"
-            android:layout_width="30dp"
-            android:layout_height="30dp"
-            android:layout_marginStart="2dp">
+            android:id="@+id/clearButton"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:layout_marginStart="2dp"
+            android:background="@drawable/mic_circle_bg">
 
             <ImageView
                 android:layout_width="16dp"
                 android:layout_height="16dp"
                 android:layout_gravity="center"
                 android:src="@drawable/ic_close"
+                android:contentDescription="@string/clear_desc" />
+        </FrameLayout>
+
+        <FrameLayout
+            android:id="@+id/historyButton"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:layout_marginStart="2dp"
+            android:background="@drawable/mic_circle_bg">
+
+            <ImageView
+                android:layout_width="16dp"
+                android:layout_height="16dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_history"
+                android:contentDescription="@string/history_desc" />
+        </FrameLayout>
+
+        <FrameLayout
+            android:id="@+id/collapseButton"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
+            android:layout_marginStart="2dp">
+
+            <ImageView
+                android:layout_width="14dp"
+                android:layout_height="14dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_chevron_down"
                 android:contentDescription="@string/collapse_desc" />
         </FrameLayout>
     </LinearLayout>
@@ -160,6 +190,73 @@
 
             <LinearLayout
                 android:id="@+id/languageList"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+        </ScrollView>
+    </LinearLayout>
+
+    <!-- History panel: last N finalized transcripts, each with a copy button,
+         plus a "clear all" action - shown over the pill. -->
+    <LinearLayout
+        android:id="@+id/historyPanel"
+        android:layout_width="260dp"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="@drawable/panel_bg"
+        android:elevation="8dp"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:padding="10dp">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/history_title"
+                android:textColor="@color/ttt_text_muted"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+
+            <FrameLayout
+                android:id="@+id/historyClearButton"
+                android:layout_width="26dp"
+                android:layout_height="26dp">
+
+                <ImageView
+                    android:layout_width="15dp"
+                    android:layout_height="15dp"
+                    android:layout_gravity="center"
+                    android:src="@drawable/ic_history_clear"
+                    android:contentDescription="@string/clear_history_desc" />
+            </FrameLayout>
+
+            <FrameLayout
+                android:id="@+id/historyCloseButton"
+                android:layout_width="26dp"
+                android:layout_height="26dp">
+
+                <ImageView
+                    android:layout_width="14dp"
+                    android:layout_height="14dp"
+                    android:layout_gravity="center"
+                    android:src="@drawable/ic_close"
+                    android:contentDescription="@string/collapse_desc" />
+            </FrameLayout>
+        </LinearLayout>
+
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="260dp"
+            android:scrollbars="vertical">
+
+            <LinearLayout
+                android:id="@+id/historyList"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical" />

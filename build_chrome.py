@@ -1,25 +1,33 @@
 #!/usr/bin/env python3
-"""Package the Chrome extension into dist/Talk-To-Text-(By-Efroni)-Chrome-Extension.zip.
+"""Package the Chrome extension into dist/chrome/.
+
+Produces, directly inside an isolated dist/chrome/ directory:
+  - Talk-To-Text-(By-Efroni)-Chrome-Extension.zip  (for the Chrome Web Store)
+  - manifest.json, background.js, content.js, icons/  (the same files,
+    unpacked, so chrome://extensions -> "Load unpacked" can point straight at
+    dist/chrome/ with no unzip step)
 
 Usage:  python build_chrome.py
 """
 
 import json
+import shutil
 import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-DIST = ROOT / "dist"
-OUT = DIST / "Talk-To-Text-(By-Efroni)-Chrome-Extension.zip"
+DIST_CHROME = ROOT / "dist" / "chrome"
+OUT = DIST_CHROME / "Talk-To-Text-(By-Efroni)-Chrome-Extension.zip"
 FILES = ["manifest.json", "background.js", "content.js"]
 DIRS = ["icons"]
 
 
 def main() -> None:
     manifest = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
-    DIST.mkdir(exist_ok=True)
-    if OUT.exists():
-        OUT.unlink()
+
+    if DIST_CHROME.exists():
+        shutil.rmtree(DIST_CHROME)
+    DIST_CHROME.mkdir(parents=True)
 
     with zipfile.ZipFile(OUT, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for name in FILES:
@@ -29,7 +37,13 @@ def main() -> None:
                 if path.is_file():
                     zf.write(path, path.relative_to(ROOT).as_posix())
 
+    for name in FILES:
+        shutil.copy2(ROOT / name, DIST_CHROME / name)
+    for d in DIRS:
+        shutil.copytree(ROOT / d, DIST_CHROME / d)
+
     print(f"Built {OUT} (v{manifest['version']}, {OUT.stat().st_size} bytes)")
+    print(f"Unpacked extension ready to load directly from {DIST_CHROME}")
 
 
 if __name__ == "__main__":

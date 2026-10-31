@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -70,9 +71,15 @@ class OverlayBubbleService : Service() {
     private lateinit var langChip: TextView
     private lateinit var transcriptPreview: TextView
     private lateinit var copyButton: FrameLayout
+    private lateinit var clearButton: FrameLayout
+    private lateinit var historyButton: FrameLayout
     private lateinit var collapseButton: FrameLayout
     private lateinit var languageSearch: EditText
     private lateinit var languageList: LinearLayout
+    private lateinit var historyPanel: LinearLayout
+    private lateinit var historyList: LinearLayout
+    private lateinit var historyClearButton: FrameLayout
+    private lateinit var historyCloseButton: FrameLayout
 
     private var recognizer: SpeechRecognizer? = null
     private var listening = false
@@ -81,6 +88,11 @@ class OverlayBubbleService : Service() {
     private var utteranceWordCount = 0
     private var utteranceLocked = false
     private var currentTranscript = ""
+    private val transcriptHistory = mutableListOf<String>()
+    // Populated asynchronously (if the device's recognizer answers at all) by
+    // ACTION_GET_LANGUAGE_DETAILS; null means "unknown", in which case we
+    // just try the requested language and let onError's fallback catch it.
+    private var supportedLanguageTags: Set<String>? = null
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var restartRunnable: Runnable? = null
@@ -93,6 +105,7 @@ class OverlayBubbleService : Service() {
         inflateOverlay()
         wireInteractions()
         populateLanguageList(Languages.PICKER_ORDER)
+        querySupportedLanguages()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
@@ -128,9 +141,15 @@ class OverlayBubbleService : Service() {
         langChip = root.findViewById(R.id.langChip)
         transcriptPreview = root.findViewById(R.id.transcriptPreview)
         copyButton = root.findViewById(R.id.copyButton)
+        clearButton = root.findViewById(R.id.clearButton)
+        historyButton = root.findViewById(R.id.historyButton)
         collapseButton = root.findViewById(R.id.collapseButton)
         languageSearch = root.findViewById(R.id.languageSearch)
         languageList = root.findViewById(R.id.languageList)
+        historyPanel = root.findViewById(R.id.historyPanel)
+        historyList = root.findViewById(R.id.historyList)
+        historyClearButton = root.findViewById(R.id.historyClearButton)
+        historyCloseButton = root.findViewById(R.id.historyCloseButton)
 
         val overlayType =
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -140,7 +159,13 @@ class OverlayBubbleService : Service() {
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
             overlayType,
+            // FLAG_NOT_TOUCH_MODAL is the important one here: without it, this
+            // window - once it becomes focusable (see openLanguagePanel) - can
+            // end up swallowing touches across the WHOLE screen instead of
+            // just its own small bounds, which reads as "everything froze".
+            // It stays set at all times; only FLAG_NOT_FOCUSABLE is ever toggled.
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT,
@@ -193,8 +218,12 @@ class OverlayBubbleService : Service() {
 
         micButton.setOnClickListener { toggleListening() }
         copyButton.setOnClickListener { copyTranscript() }
+        clearButton.setOnClickListener { clearCurrentTranscript() }
+        historyButton.setOnClickListener { openHistoryPanel() }
         collapseButton.setOnClickListener { collapse() }
         langChip.setOnClickListener { openLanguagePanel() }
+        historyClearButton.setOnClickListener { clearAllHistory() }
+        historyCloseButton.setOnClickListener { closeHistoryPanel() }
 
         languageSearch.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
@@ -219,7 +248,7 @@ class OverlayBubbleService : Service() {
     private fun screenWidthPx(): Int = resources.displayMetrics.widthPixels
 
     private fun snapToNearestEdge() {
-        val bubbleWidth = compactBubble.width.takeIf { it > 0 } ?: dp(52)
+        val bubbleWidth = compactBubble.width.takeIf { it > 0 } ?: dp(48)
         val screenWidth = screenWidthPx()
         val leftTarget = dp(EDGE_MARGIN_DP)
         val rightTarget = screenWidth - bubbleWidth - dp(EDGE_MARGIN_DP)
@@ -241,15 +270,32 @@ class OverlayBubbleService : Service() {
     private fun expand() {
         compactBubble.visibility = View.GONE
         languagePanel.visibility = View.GONE
+        historyPanel.visibility = View.GONE
         expandedPill.visibility = View.VISIBLE
         clampIntoScreen()
     }
 
     private fun collapse() {
         closeLanguagePanel()
+        closeHistoryPanel()
         expandedPill.visibility = View.GONE
         languagePanel.visibility = View.GONE
+        historyPanel.visibility = View.GONE
         compactBubble.visibility = View.VISIBLE
+        clampIntoScreen()
+    }
+
+    private fun openHistoryPanel() {
+        populateHistoryList()
+        expandedPill.visibility = View.GONE
+        historyPanel.visibility = View.VISIBLE
+        clampIntoScreen()
+    }
+
+    private fun closeHistoryPanel() {
+        if (historyPanel.visibility != View.VISIBLE) return
+        historyPanel.visibility = View.GONE
+        expandedPill.visibility = View.VISIBLE
         clampIntoScreen()
     }
 
@@ -304,6 +350,69 @@ class OverlayBubbleService : Service() {
 
     private fun getColorCompat(resId: Int): Int =
         androidx.core.content.ContextCompat.getColor(this, resId)
+
+    /* ------------------------------------------------------------------ */
+    /* transcript history                                                  */
+    /* ------------------------------------------------------------------ */
+    private fun populateHistoryList() {
+        historyList.removeAllViews()
+        if (transcriptHistory.isEmpty()) {
+            val empty = TextView(this)
+            empty.text = getString(R.string.transcript_placeholder)
+            empty.setTextColor(getColorCompat(R.color.ttt_text_muted))
+            empty.textSize = 12f
+            empty.setPadding(dp(14), dp(18), dp(14), dp(18))
+            historyList.addView(empty)
+            return
+        }
+        for (entry in transcriptHistory) {
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            row.gravity = Gravity.CENTER_VERTICAL
+            row.setPadding(dp(10), dp(8), dp(10), dp(8))
+
+            val text = TextView(this)
+            text.text = entry
+            text.setTextColor(getColorCompat(R.color.ttt_text_primary))
+            text.textSize = 12f
+            text.maxLines = 2
+            val textParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            text.layoutParams = textParams
+
+            val copy = TextView(this)
+            copy.text = getString(R.string.copy_label)
+            copy.setTextColor(getColorCompat(R.color.ttt_accent))
+            copy.textSize = 12f
+            copy.setPadding(dp(10), dp(4), dp(0), dp(4))
+            copy.setOnClickListener {
+                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("Talk-To-Text", entry))
+                Toast.makeText(this, R.string.copied_toast, Toast.LENGTH_SHORT).show()
+            }
+
+            row.addView(text)
+            row.addView(copy)
+            historyList.addView(row)
+        }
+    }
+
+    private fun pushHistory(text: String) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return
+        transcriptHistory.add(0, trimmed)
+        while (transcriptHistory.size > 20) transcriptHistory.removeAt(transcriptHistory.size - 1)
+    }
+
+    private fun clearAllHistory() {
+        transcriptHistory.clear()
+        populateHistoryList()
+        Toast.makeText(this, R.string.cleared_toast, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun clearCurrentTranscript() {
+        currentTranscript = ""
+        transcriptPreview.text = getString(R.string.transcript_placeholder)
+    }
 
     private fun selectLanguage(lang: SpeechLanguage) {
         if (utteranceLocked && listening) {
@@ -363,6 +472,15 @@ class OverlayBubbleService : Service() {
     }
 
     private fun startListening() {
+        // Proactive check: if we already know (from querySupportedLanguages)
+        // that this language's pack isn't on the device, don't even try it -
+        // drop straight to Auto rather than starting a session that's certain
+        // to fail and hang the mic button in a "listening" state.
+        if (selectedLanguage != Languages.AUTO_DETECT && isLanguageKnownUnsupported(selectedLanguage.tag)) {
+            Toast.makeText(this, R.string.language_unavailable_toast, Toast.LENGTH_SHORT).show()
+            selectedLanguage = Languages.AUTO_DETECT
+            langChip.text = chipLabel(selectedLanguage)
+        }
         listening = true
         utteranceWordCount = 0
         utteranceLocked = false
@@ -428,15 +546,19 @@ class OverlayBubbleService : Service() {
         override fun onPartialResults(partialResults: Bundle?) {
             val text = bestText(partialResults) ?: return
             maybeLockUtterance(text)
-            transcriptPreview.text = (currentTranscript + " " + text).trim()
+            // Replace, don't append: the preview always shows just the
+            // in-progress utterance, not an ever-growing wall of text.
+            transcriptPreview.text = text
         }
 
         override fun onResults(results: Bundle?) {
             val text = bestText(results)
             if (!text.isNullOrBlank()) {
                 maybeLockUtterance(text)
-                currentTranscript = (currentTranscript + " " + text).trim()
+                currentTranscript = text.trim()
                 transcriptPreview.text = currentTranscript
+                pushHistory(currentTranscript)
+                autoCopyToClipboard(currentTranscript)
             }
             utteranceWordCount = 0
             utteranceLocked = false
@@ -452,6 +574,19 @@ class OverlayBubbleService : Service() {
             if (!listening) return
             when (error) {
                 SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> scheduleRestart(200)
+                SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED, SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE -> {
+                    if (selectedLanguage != Languages.AUTO_DETECT) {
+                        Toast.makeText(
+                            this@OverlayBubbleService, R.string.language_unavailable_toast, Toast.LENGTH_SHORT
+                        ).show()
+                        applyLanguage(Languages.AUTO_DETECT)
+                    } else {
+                        // Even the device default failed - stop instead of looping forever.
+                        listening = false
+                        updateMicUi()
+                        Toast.makeText(this@OverlayBubbleService, R.string.recognizer_unavailable, Toast.LENGTH_SHORT).show()
+                    }
+                }
                 SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> {
                     listening = false
                     updateMicUi()
@@ -482,9 +617,46 @@ class OverlayBubbleService : Service() {
     private fun copyTranscript() {
         val text = currentTranscript.trim()
         if (text.isEmpty()) return
+        autoCopyToClipboard(text)
+        Toast.makeText(this, R.string.copied_toast, Toast.LENGTH_SHORT).show()
+    }
+
+    // Every finalized utterance lands on the clipboard automatically, with no
+    // toast - the explicit copy button (above) is the one that confirms itself.
+    private fun autoCopyToClipboard(text: String) {
+        if (text.isBlank()) return
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("Talk-To-Text", text))
-        Toast.makeText(this, R.string.copied_toast, Toast.LENGTH_SHORT).show()
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* language-pack availability                                         */
+    /* ------------------------------------------------------------------ */
+    private fun querySupportedLanguages() {
+        try {
+            val intent = RecognizerIntent.getVoiceDetailsIntent(this)
+                ?: Intent(RecognizerIntent.ACTION_GET_LANGUAGE_DETAILS)
+            sendOrderedBroadcast(
+                intent, null,
+                object : BroadcastReceiver() {
+                    override fun onReceive(context: Context, received: Intent) {
+                        val extras = getResultExtras(true)
+                        val supported = extras.getStringArrayList(RecognizerIntent.EXTRA_SUPPORTED_LANGUAGES)
+                        if (supported != null) supportedLanguageTags = supported.toSet()
+                    }
+                },
+                null, 0, null, null,
+            )
+        } catch (_: Exception) {
+            // Leave supportedLanguageTags null - startListening() will just try
+            // the requested language and rely on onError's fallback above.
+        }
+    }
+
+    /** Null if unknown (device didn't answer) - treated as "try it anyway". */
+    private fun isLanguageKnownUnsupported(tag: String): Boolean {
+        val known = supportedLanguageTags ?: return false
+        return tag.isNotEmpty() && tag !in known
     }
 
     /* ------------------------------------------------------------------ */

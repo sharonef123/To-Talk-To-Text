@@ -485,6 +485,16 @@
     }
   }
 
+  function clearHistory() {
+    state.history = [];
+    renderHistory();
+    try {
+      chrome.storage.local.set({ history: [] });
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
   async function copyToClipboard(text) {
     try {
       await navigator.clipboard.writeText(text);
@@ -799,20 +809,47 @@
 .ttt-chevron.open svg { transform: rotate(180deg); }
 .ttt-drawer {
   display: none;
+  flex-direction: column;
   position: absolute;
   right: 0;
   bottom: calc(100% + 10px);
   width: 300px;
-  max-height: 320px;
-  overflow-y: auto;
+  max-height: 360px;
   background: #14171c;
   border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 14px;
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.34);
   pointer-events: auto;
+  overflow: hidden;
 }
 .ttt-root.flip .ttt-drawer { bottom: auto; top: calc(100% + 10px); }
-.ttt-drawer.open { display: block; }
+.ttt-drawer.open { display: flex; }
+.ttt-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+.ttt-drawer-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #6b7280;
+}
+.ttt-clear {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  color: #9aa1ab;
+}
+.ttt-clear:hover { background: rgba(255, 59, 48, 0.15); color: #ff6b6b; }
+.ttt-drawer-list {
+  overflow-y: auto;
+  max-height: 310px;
+}
 .ttt-drawer-empty {
   padding: 18px 14px;
   color: #6b7280;
@@ -867,6 +904,16 @@
   <path d="M6 9l6 6 6-6"></path>
 </svg>`;
 
+  const TRASH_SVG = `
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+     stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <path d="M3 6h18"></path>
+  <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+  <path d="M10 11v6"></path>
+  <path d="M14 11v6"></path>
+</svg>`;
+
   function buildUI() {
     if (ui.ready) return;
     const host = document.createElement('div');
@@ -876,7 +923,13 @@
     shadow.innerHTML = `
       <style>${STYLE}</style>
       <div class="ttt-root">
-        <div class="ttt-drawer" role="region" aria-label="Recent transcriptions"></div>
+        <div class="ttt-drawer" role="region" aria-label="Recent transcriptions">
+          <div class="ttt-drawer-header">
+            <span class="ttt-drawer-title">Recent</span>
+            <button class="ttt-btn ttt-clear" type="button" aria-label="Clear history">${TRASH_SVG}</button>
+          </div>
+          <div class="ttt-drawer-list"></div>
+        </div>
         <div class="ttt-pill" title="Talk→To→Text (By Efroni) — Ctrl+Shift+S start/stop, Ctrl+Shift+L language. Drag to move.">
           <button class="ttt-btn ttt-mic" type="button" aria-pressed="false"
                   aria-label="Start or stop dictation">${MIC_SVG}</button>
@@ -903,6 +956,7 @@
     ui.text = shadow.querySelector('.ttt-text');
     ui.chevron = shadow.querySelector('.ttt-chevron');
     ui.drawer = shadow.querySelector('.ttt-drawer');
+    ui.drawerList = shadow.querySelector('.ttt-drawer-list');
     ui.langs = Array.from(shadow.querySelectorAll('.ttt-lang'));
     ui.ready = true;
 
@@ -930,6 +984,12 @@
     }
 
     ui.drawer.addEventListener('click', (e) => {
+      const clearBtn = e.target.closest && e.target.closest('.ttt-clear');
+      if (clearBtn) {
+        e.stopPropagation();
+        clearHistory();
+        return;
+      }
       const btn = e.target.closest && e.target.closest('.ttt-copy');
       if (!btn) return;
       e.stopPropagation();
@@ -1049,10 +1109,10 @@
   function renderHistory() {
     if (!ui.ready) return;
     if (!state.history.length) {
-      ui.drawer.innerHTML = '<div class="ttt-drawer-empty">No transcriptions yet</div>';
+      ui.drawerList.innerHTML = '<div class="ttt-drawer-empty">No transcriptions yet</div>';
       return;
     }
-    ui.drawer.innerHTML = state.history.map((item, idx) => `
+    ui.drawerList.innerHTML = state.history.map((item, idx) => `
       <div class="ttt-item">
         <span class="ttt-item-text" dir="auto">${escapeHtml(item.text)}</span>
         <button type="button" class="ttt-btn ttt-copy" data-idx="${idx}">Copy</button>

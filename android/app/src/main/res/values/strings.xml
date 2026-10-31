@@ -22,11 +22,18 @@
     <string name="bubble_compact_desc">Talk→To→Text bubble - tap to expand, drag to move</string>
     <string name="mic_toggle_desc">Start or stop listening</string>
     <string name="copy_desc">Copy transcript to clipboard</string>
+    <string name="copy_label">Copy</string>
     <string name="collapse_desc">Collapse</string>
+    <string name="clear_desc">Clear current transcript</string>
+    <string name="history_desc">Show transcript history</string>
+    <string name="history_title">Recent</string>
+    <string name="clear_history_desc">Clear all history</string>
     <string name="lang_auto_short">Auto</string>
     <string name="transcript_placeholder">Tap the mic to start…</string>
     <string name="search_languages_hint">Search languages…</string>
     <string name="copied_toast">Copied to clipboard</string>
+    <string name="cleared_toast">Cleared</string>
+    <string name="language_unavailable_toast">That language isn\'t available on this device - using the default instead</string>
 
     <!-- Foreground service notification -->
     <string name="notif_channel_name">Talk→To→Text bubble</string>

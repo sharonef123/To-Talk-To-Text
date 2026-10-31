@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Build the debug APK and copy it to dist/Talk-To-Text-(By-Efroni)-Android-App.apk.
+# Build the debug APK and copy it to dist/android/Talk-To-Text-(By-Efroni)-Android-App.apk.
 # Requires JDK 17+ and the Android SDK (ANDROID_HOME). Uses ./gradlew if present,
 # otherwise falls back to a system `gradle` install.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(dirname "$HERE")"
-DIST="$ROOT/dist"
+DIST="$ROOT/dist/android"
 APK_NAME="Talk-To-Text-(By-Efroni)-Android-App.apk"
 
 cd "$HERE"

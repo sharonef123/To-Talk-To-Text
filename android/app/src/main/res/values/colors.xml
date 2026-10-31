@@ -7,4 +7,6 @@
     <color name="ttt_text_primary">#E6E8EB</color>
     <color name="ttt_text_muted">#9AA1AB</color>
     <color name="ttt_chip_bg">#1F2329</color>
+    <color name="ttt_card">#1C2027</color>
+    <color name="ttt_success">#2FB170</color>
 </resources>

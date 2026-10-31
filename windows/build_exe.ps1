@@ -1,12 +1,12 @@
-# Build dist/Talk-To-Text-(By-Efroni)-Windows-Desktop.exe (single portable
-# file, icon bundled).
+# Build dist/windows/Talk-To-Text-(By-Efroni)-Windows-Desktop.exe (single
+# portable file, icon bundled) plus a standalone dist/windows/run.bat.
 # Usage (from the project root):  powershell -ExecutionPolicy Bypass -File windows\build_exe.ps1
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 $Win = Join-Path $Root "windows"
 $Build = Join-Path $Root "build\windows"
-$Dist = Join-Path $Root "dist"
+$Dist = Join-Path $Root "dist\windows"
 $Icon = Join-Path $Build "app.ico"
 $AppName = "Talk-To-Text-(By-Efroni)-Windows-Desktop"
 
@@ -73,4 +73,16 @@ $ExePath = Join-Path $Dist "$AppName.exe"
 if (-not (Test-Path $ExePath)) {
     throw "Build reported success but $ExePath was not found."
 }
+
+# A minimal standalone launcher next to the exe - this folder travels on its
+# own (e.g. zipped up for someone else), so it only ever double-clicks the
+# exe sitting beside it; it never searches for or shells out to Python.
+$RunBatPath = Join-Path $Dist "run.bat"
+@"
+@echo off
+cd /d "%~dp0"
+start "" "$AppName.exe"
+"@ | Set-Content -Path $RunBatPath -Encoding ASCII
+
 Write-Host "Built: $ExePath"
+Write-Host "Built: $RunBatPath"

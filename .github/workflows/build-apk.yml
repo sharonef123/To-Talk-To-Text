@@ -1,10 +1,12 @@
 name: Build Android APK
 
 # Compiles the Android app (android/) into
-# Talk-To-Text-(By-Efroni)-Android-App.apk on every push and PR, and
-# publishes it as a downloadable build artifact. On pushes to main/master it
-# also cuts a GitHub Release carrying the APK, so there's always a direct
-# download link without needing local Android SDK/JDK tooling.
+# dist/android/Talk-To-Text-(By-Efroni)-Android-App.apk - isolated from the
+# Chrome/Windows outputs under their own dist/<platform>/ directories - on
+# every push and PR, and publishes it as a downloadable build artifact. On
+# pushes to main/master it also cuts a GitHub Release carrying the APK, so
+# there's always a direct download link without needing local Android
+# SDK/JDK tooling.
 
 on:
   push:
@@ -46,15 +48,15 @@ jobs:
 
       - name: Stage APK as release artifact
         run: |
-          mkdir -p dist
-          cp "android/app/build/outputs/apk/debug/app-debug.apk" "dist/${APK_NAME}"
-          ls -la dist/
+          mkdir -p dist/android
+          cp "android/app/build/outputs/apk/debug/app-debug.apk" "dist/android/${APK_NAME}"
+          ls -la dist/android/
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: Talk-To-Text-Android-App
-          path: dist/${{ env.APK_NAME }}
+          path: dist/android/${{ env.APK_NAME }}
           if-no-files-found: error
 
       - name: Create / update GitHub Release
@@ -66,6 +68,6 @@ jobs:
           body: |
             Automated APK build from commit ${{ github.sha }}.
             This is a **debug** build (unsigned, debuggable) produced by `.github/workflows/build-apk.yml`.
-          files: dist/${{ env.APK_NAME }}
+          files: dist/android/${{ env.APK_NAME }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

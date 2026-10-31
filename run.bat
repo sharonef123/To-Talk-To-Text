@@ -18,7 +18,7 @@ setlocal enabledelayedexpansion
 :: multi-line ( blocks ) wherever such a path is involved, for the same reason.
 cd /d "%~dp0"
 
-set "EXE=dist\Talk-To-Text-(By-Efroni)-Windows-Desktop.exe"
+set "EXE=dist\windows\Talk-To-Text-(By-Efroni)-Windows-Desktop.exe"
 if exist "!EXE!" goto :run_exe
 
 echo No prebuilt exe found at "!EXE!" - running from source instead.
