@@ -1,0 +1,9 @@
+# Speech recognition and dictation utilities
+faster-whisper==1.0.0
+pyperclip==1.8.3
+pystray==0.8.2
+keyboard==0.13.5
+ Pillow==10.0.0
+
+# Windows-specific helpers (optional, included for completeness)
+pywin32==305

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">To Talk To Text</string>
+    <string name="tap_to_speak">Tap to speak</string>
+    <string name="switch_language">Switch language (EN / HE)</string>
+    <string name="language_label">Language: %1$s</string>
+    <string name="hint_output">Your words appear here</string>
+    <string name="speak_prompt">Speak now</string>
+    <string name="mic_permission_denied">Microphone permission is required</string>
+    <string name="recognizer_unavailable">Speech recognition is not available on this device</string>
+</resources>

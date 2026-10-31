@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "To Talk To Text (By Efroni)",
+  "version": "1.0.0",
+  "description": "Real-time speech-to-text in Hebrew and English, typed right where your cursor is. No popups, no ads, no accounts.",
+  "permissions": ["storage"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Toggle dictation (Ctrl+Shift+S)",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "commands": {
+    "toggle-dictation": {
+      "suggested_key": { "default": "Ctrl+Shift+S" },
+      "description": "Start / stop dictation"
+    },
+    "toggle-language": {
+      "suggested_key": { "default": "Ctrl+Shift+L" },
+      "description": "Switch language (EN / HE)"
+    }
+  }
+}
