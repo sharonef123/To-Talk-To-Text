@@ -20,8 +20,9 @@
   // document.activeElement briefly disagrees (split layouts / frameworks that
   // reassign focus asynchronously after pointerdown).
   const PIN_TTL_MS = 400;
-  // Window after a session restart during which the engine may echo the tail of
-  // the previous, already-sealed utterance; used to suppress duplicate text.
+  // Window after a session restart (or a frozen/dead segment) during which the
+  // engine may echo the tail of the already-sealed utterance; used to drop
+  // duplicate text outright rather than trying to patch it in place.
   const RESTART_ECHO_MS = 3000;
 
   const state = {
@@ -31,13 +32,11 @@
     error: '',     // fatal, stops dictation
     hint: '',      // transient, cleared on the next result
     interim: '',   // live partial transcript
-    buffer: '',    // text produced while no field was focused
     prov: null,    // the segment currently being written into the field
     rec: null,
     running: false,
     timer: 0,
     errStreak: 0,
-    freshSession: false,
     lastFinalText: '',
     lastFinalAt: 0,
     pinned: null,
@@ -286,37 +285,22 @@
   }
 
   /* ------------------------------------------------------------------ */
-  /* helpers: dedup across a restarted recognition session                */
+  /* helpers: zero-tolerance duplicate suppression                        */
   /* ------------------------------------------------------------------ */
-  // Some engines re-emit a bit of the previous utterance's tail right after an
-  // automatic reconnect (the audio buffer overlaps the restart boundary). Strip
-  // any such overlap against the last phrase we already sealed into the page.
-  function stripRestartEcho(text) {
-    if (!state.lastFinalText) return text;
-    if (Date.now() - state.lastFinalAt > RESTART_ECHO_MS) return text;
-
-    const last = state.lastFinalText.trim();
-    if (!last) return text;
-    const normLast = last.toLowerCase();
-    const normIncoming = text.toLowerCase();
-
-    if (normIncoming === normLast) return '';
-    if (normIncoming.startsWith(normLast)) {
-      return text.slice(last.length).replace(/^\s+/, '');
-    }
-
-    // Partial word-level overlap (engine clipped the boundary slightly
-    // differently): compare the last few words of what we sealed against the
-    // first few words of what just came in.
-    const lastWords = normLast.split(/\s+/);
-    const incWords = text.split(/\s+/);
-    const maxCheck = Math.min(lastWords.length, incWords.length, 6);
-    for (let k = maxCheck; k > 0; k--) {
-      const a = lastWords.slice(-k).join(' ');
-      const b = incWords.slice(0, k).join(' ').toLowerCase();
-      if (a === b) return incWords.slice(k).join(' ');
-    }
-    return text;
+  // Some engines re-emit part of the previous utterance's tail right after an
+  // automatic reconnect, or after a segment was frozen mid-utterance (page
+  // moved focus, rewrote the field, etc.) - in both cases the words already
+  // sealed into the page must never be typed a second time. Rather than
+  // trying to patch a partial overlap back together (fragile), any new text
+  // that merely repeats what was just sealed is dropped outright.
+  function isRecentDuplicateOfLastFinal(text) {
+    if (!state.lastFinalText) return false;
+    if (Date.now() - state.lastFinalAt > RESTART_ECHO_MS) return false;
+    const norm = (s) => s.trim().toLowerCase().replace(/\s+/g, ' ');
+    const incoming = norm(text);
+    const last = norm(state.lastFinalText);
+    if (!incoming || !last) return false;
+    return incoming === last || last.endsWith(incoming) || incoming.startsWith(last);
   }
 
   /* ------------------------------------------------------------------ */
@@ -403,19 +387,18 @@
       && caret.startOffset === range.endOffset;
   }
 
-  function addToBuffer(text) {
-    state.buffer += text;
-    // Never let an unfocused buffer grow without bound.
-    if (state.buffer.length > 4000) state.buffer = state.buffer.slice(-4000);
-  }
-
   // Route a piece of text to the caret. `isFinal` seals the current segment.
+  // Strictly idempotent: interim results only ever replace the one active
+  // segment's range; a final locks that range in, appends the trailing
+  // space, and releases the segment reference so the next utterance starts
+  // clean. If no field is focused, the text is simply not written anywhere -
+  // it is never queued for later replay, since replaying buffered text was
+  // itself a source of duplicate-looking output. The caller still records
+  // every final phrase in the history drawer, so nothing is lost from the
+  // user's point of view even when no field has focus.
   function putText(raw, isFinal) {
     const text = isFinal ? withTrailingSpace(raw) : raw;
     if (!text) return;
-
-    // Anything held while no field was focused goes first, so text keeps its order.
-    if (state.buffer && currentEditable()) flushBuffer();
 
     let seg = state.prov;
     if (seg && !seg.dead && !segmentLive(seg)) {
@@ -434,13 +417,11 @@
     if (!seg) {
       const el = currentEditable();
       if (!el) {
-        addToBuffer(text);
         render();
         return;
       }
       seg = beginSegment(el, withLeadingSpace(el, text));
       if (!seg) {
-        addToBuffer(text);
         render();
         return;
       }
@@ -459,14 +440,6 @@
       fireChange(seg.el);
     }
     render();
-  }
-
-  function flushBuffer() {
-    if (!state.buffer) return;
-    if (!currentEditable()) return;
-    const text = state.buffer;
-    state.buffer = '';
-    putText(text, true);
   }
 
   /* ------------------------------------------------------------------ */
@@ -490,6 +463,17 @@
     renderHistory();
     try {
       chrome.storage.local.set({ history: [] });
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  function deleteHistoryItem(idx) {
+    if (idx < 0 || idx >= state.history.length) return;
+    state.history.splice(idx, 1);
+    renderHistory();
+    try {
+      chrome.storage.local.set({ history: state.history });
     } catch (_) {
       /* ignore */
     }
@@ -543,11 +527,11 @@
         else interim += text;
       }
 
-      if (state.freshSession) {
-        state.freshSession = false;
-        if (final) final = stripRestartEcho(final);
-        else if (interim) interim = stripRestartEcho(interim);
-      }
+      // Zero-tolerance duplicate guard: applies on every result, not just
+      // right after a restart - a frozen/dead segment can leave stale text
+      // behind at any time, not only across a reconnect.
+      if (final && isRecentDuplicateOfLastFinal(final)) final = '';
+      if (!final && interim && isRecentDuplicateOfLastFinal(interim)) interim = '';
 
       if (final) {
         putText(final, true);
@@ -602,7 +586,6 @@
     if (!state.rec) state.rec = createRecognition();
     if (!state.rec) return;
     state.rec.lang = state.lang;
-    state.freshSession = true;
     try {
       state.rec.start();
       state.running = true;
@@ -646,7 +629,6 @@
     state.error = '';
     state.hint = '';
     state.errStreak = 0;
-    flushBuffer();
     startRecognition();
     render();
     syncBadge();
@@ -658,7 +640,6 @@
     state.prov = null;
     state.errStreak = 0;
     stopRecognition();
-    flushBuffer();
     render();
     syncBadge();
   }
@@ -887,6 +868,15 @@
 }
 .ttt-copy:hover { background: rgba(255, 255, 255, 0.16); }
 .ttt-copy.copied { background: #1e8e5a; color: #fff; }
+.ttt-item-delete {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  margin-left: 2px;
+  border-radius: 999px;
+  color: #6b7280;
+}
+.ttt-item-delete:hover { background: rgba(255, 59, 48, 0.15); color: #ff6b6b; }
 `;
 
   const MIC_SVG = `
@@ -912,6 +902,13 @@
   <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
   <path d="M10 11v6"></path>
   <path d="M14 11v6"></path>
+</svg>`;
+
+  const ITEM_DELETE_SVG = `
+<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+     stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <path d="M6 6l12 12"></path>
+  <path d="M18 6L6 18"></path>
 </svg>`;
 
   function buildUI() {
@@ -988,6 +985,12 @@
       if (clearBtn) {
         e.stopPropagation();
         clearHistory();
+        return;
+      }
+      const deleteBtn = e.target.closest && e.target.closest('.ttt-item-delete');
+      if (deleteBtn) {
+        e.stopPropagation();
+        deleteHistoryItem(Number(deleteBtn.dataset.idx));
         return;
       }
       const btn = e.target.closest && e.target.closest('.ttt-copy');
@@ -1116,6 +1119,7 @@
       <div class="ttt-item">
         <span class="ttt-item-text" dir="auto">${escapeHtml(item.text)}</span>
         <button type="button" class="ttt-btn ttt-copy" data-idx="${idx}">Copy</button>
+        <button type="button" class="ttt-btn ttt-item-delete" data-idx="${idx}" aria-label="Delete this transcription">${ITEM_DELETE_SVG}</button>
       </div>`).join('');
   }
 
@@ -1141,7 +1145,7 @@
     const message =
       state.error ||
       state.hint ||
-      (state.buffer ? 'Focus a text field to type…' : '') ||
+      (state.active && !currentEditable() ? 'Focus a text field to type…' : '') ||
       state.interim ||
       (state.active ? 'Listening…' : '');
 
@@ -1160,10 +1164,6 @@
   /* ------------------------------------------------------------------ */
   /* wiring                                                              */
   /* ------------------------------------------------------------------ */
-  document.addEventListener('focusin', (e) => {
-    if (state.buffer && isEditable(e.target)) flushBuffer();
-  }, true);
-
   chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
     if (!msg) return;
     if (msg.type === 'toggle-dictation') {

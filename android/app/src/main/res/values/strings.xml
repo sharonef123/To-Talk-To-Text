@@ -1,42 +1,57 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Default (no locale qualifier) = Hebrew. The in-app EN/HE toggle in
+     MainActivity calls AppCompatDelegate.setApplicationLocales(), which picks
+     between this file and values-en/strings.xml regardless of the device's
+     system locale. -->
 <resources>
     <string name="app_name">Talk→To→Text</string>
     <string name="app_name_full">Talk→To→Text (By Efroni)</string>
 
     <!-- MainActivity: permission onboarding -->
     <string name="onboarding_title">Talk→To→Text (By Efroni)</string>
-    <string name="onboarding_subtitle">A floating bubble that transcribes speech into any app - no full-screen dialog, no popups.</string>
-    <string name="perm_overlay_title">Display over other apps</string>
-    <string name="perm_overlay_desc">Needed to show the floating bubble on top of whatever you\'re using.</string>
-    <string name="perm_overlay_granted">Granted</string>
-    <string name="perm_overlay_action">Grant</string>
-    <string name="perm_mic_title">Microphone</string>
-    <string name="perm_mic_desc">Needed to hear and transcribe your speech.</string>
-    <string name="perm_mic_granted">Granted</string>
-    <string name="perm_mic_action">Grant</string>
-    <string name="start_bubble_button">Start floating bubble</string>
-    <string name="stop_bubble_button">Stop floating bubble</string>
-    <string name="recognizer_unavailable">Speech recognition is not available on this device</string>
+    <string name="onboarding_subtitle">בועה צפה שמתמללת דיבור לכל אפליקציה - בלי דיאלוג במסך מלא, בלי חלונות קופצים.</string>
+    <string name="perm_overlay_title">תצוגה מעל אפליקציות אחרות</string>
+    <string name="perm_overlay_desc">נדרש כדי להציג את הבועה הצפה מעל כל מה שאתה משתמש בו.</string>
+    <string name="perm_overlay_granted">אושר</string>
+    <string name="perm_overlay_action">אשר</string>
+    <string name="perm_mic_title">מיקרופון</string>
+    <string name="perm_mic_desc">נדרש כדי לשמוע ולתמלל את הדיבור שלך.</string>
+    <string name="perm_mic_granted">אושר</string>
+    <string name="perm_mic_action">אשר</string>
+    <string name="perm_access_title">שירות נגישות</string>
+    <string name="perm_access_desc">מאפשר הזרקת טקסט ישירות לשדה הפעיל באפליקציות אחרות, לא רק ללוח.</string>
+    <string name="perm_access_granted">אושר</string>
+    <string name="perm_access_action">אשר</string>
+    <string name="start_bubble_button">הפעל בועה צפה</string>
+    <string name="stop_bubble_button">עצור בועה צפה</string>
+    <string name="recognizer_unavailable">זיהוי דיבור אינו זמין במכשיר זה</string>
+    <string name="lang_toggle_label">EN</string>
 
     <!-- Overlay bubble -->
-    <string name="bubble_compact_desc">Talk→To→Text bubble - tap to expand, drag to move</string>
-    <string name="mic_toggle_desc">Start or stop listening</string>
-    <string name="copy_desc">Copy transcript to clipboard</string>
-    <string name="copy_label">Copy</string>
-    <string name="collapse_desc">Collapse</string>
-    <string name="clear_desc">Clear current transcript</string>
-    <string name="history_desc">Show transcript history</string>
-    <string name="history_title">Recent</string>
-    <string name="clear_history_desc">Clear all history</string>
-    <string name="lang_auto_short">Auto</string>
-    <string name="transcript_placeholder">Tap the mic to start…</string>
-    <string name="search_languages_hint">Search languages…</string>
-    <string name="copied_toast">Copied to clipboard</string>
-    <string name="cleared_toast">Cleared</string>
-    <string name="language_unavailable_toast">That language isn\'t available on this device - using the default instead</string>
+    <string name="bubble_compact_desc">בועת Talk→To→Text - הקשה להקלטה, לחיצה ארוכה להגדרות, גרירה להזזה</string>
+    <string name="mic_toggle_desc">התחל או הפסק הקלטה</string>
+    <string name="copy_desc">העתק תמלול ללוח</string>
+    <string name="copy_label">העתק</string>
+    <string name="collapse_desc">סגור</string>
+    <string name="clear_desc">נקה תמלול נוכחי</string>
+    <string name="history_desc">הצג היסטוריית תמלולים</string>
+    <string name="history_title">אחרונים</string>
+    <string name="clear_history_desc">נקה את כל ההיסטוריה</string>
+    <string name="delete_item_desc">מחק תמלול זה</string>
+    <string name="close_bubble_desc">כבה את הבועה הצפה</string>
+    <string name="lang_auto_short">אוטו׳</string>
+    <string name="transcript_placeholder">הקש על המיקרופון להתחלה…</string>
+    <string name="search_languages_hint">חיפוש שפות…</string>
+    <string name="copied_toast">הועתק ללוח</string>
+    <string name="cleared_toast">נוקה</string>
+    <string name="language_unavailable_toast">השפה הזו אינה מותקנת במכשיר - עובר לברירת המחדל</string>
+    <string name="injected_toast">הוזרק לשדה הפעיל</string>
 
     <!-- Foreground service notification -->
-    <string name="notif_channel_name">Talk→To→Text bubble</string>
-    <string name="notif_title">Talk→To→Text is running</string>
-    <string name="notif_text">Tap to open, or tap the bubble to dictate.</string>
+    <string name="notif_channel_name">בועת Talk→To→Text</string>
+    <string name="notif_title">Talk→To→Text פעיל</string>
+    <string name="notif_text">הקש לפתיחה, או הקש על הבועה להתמלל.</string>
+
+    <!-- Accessibility service description shown in system Settings -->
+    <string name="accessibility_service_desc">מאפשר ל-Talk→To→Text להזריק טקסט מתומלל ישירות לשדה הטקסט הפעיל באפליקציה שבה אתה נמצא.</string>
 </resources>

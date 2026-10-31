@@ -1,40 +1,35 @@
 """Talk→To→Text (By Efroni) - Windows 11 background dictation.
 
+A small frameless, always-on-top floating pill (bottom-right of the screen)
+mirrors the Chrome extension's UI: a mic button that glows red while
+recording, a HE/EN language toggle, and a minimize button.
+
 - Ctrl+Shift+Space  : start / stop recording. On stop, the audio is transcribed
-                      locally and typed into the focused window.
+                      and typed into the focused window.
 - Ctrl+Shift+L      : switch language (Hebrew / English).
 - Ctrl+Shift+Q      : quit.
 
-Transcription tries faster-whisper's "tiny" model first (small enough to load
-instantly, no multi-hundred-MB download stall on first run). If that model
-can't be loaded or fails to transcribe for any reason, this falls back to
-Google's free Web Speech API (via the `speech_recognition` package) rather
-than hanging or crashing. A tray icon shows Ready / Listening / Transcribing
-status as non-blocking notifications.
-
-Text is delivered via the clipboard and a Ctrl+V keystroke; the previous clipboard
-contents are restored afterwards.
+Transcription uses Google's free Web Speech API (via the `speech_recognition`
+package) - no local model to download, so there is never a multi-hundred-MB
+stall on first run; it just needs an internet connection. Text is delivered
+via the clipboard and a Ctrl+V keystroke; the previous clipboard contents are
+restored afterwards.
 """
 
-import ctypes
-import io
 import sys
 import threading
 import time
+import tkinter as tk
 
 import keyboard
 import numpy as np
 import pyperclip
-import pystray
 import sounddevice as sd
-from faster_whisper import WhisperModel
-from PIL import Image, ImageDraw
+import speech_recognition as sr
 
 SAMPLE_RATE = 16000
-MODEL_NAME = "tiny"  # smallest Whisper model - loads fast, no heavy download stall
 LANGUAGES = {"en": "English", "he": "Hebrew"}
-# faster-whisper uses bare ISO-639-1 codes; the Google Web Speech fallback
-# (via speech_recognition) wants a BCP-47 locale tag.
+# speech_recognition's Google Web Speech backend wants a BCP-47 locale tag.
 GOOGLE_LANG_TAGS = {"en": "en-US", "he": "he-IL"}
 
 HOTKEY_TOGGLE = "ctrl+shift+space"
@@ -43,79 +38,153 @@ HOTKEY_QUIT = "ctrl+shift+q"
 
 APP_TITLE = "Talk→To→Text (By Efroni)"
 
+COLOR_BG = "#14171c"
+COLOR_BORDER = "#2a2e35"
+COLOR_TEXT = "#e6e8eb"
+COLOR_MUTED = "#9aa1ab"
+COLOR_MIC_IDLE = "#1f2329"
+COLOR_MIC_ON = "#c9343a"
+COLOR_ACCENT = "#4c8bf5"
+
 _state_lock = threading.Lock()
 _recording = False
 _frames: list[np.ndarray] = []
 _stream: sd.InputStream | None = None
 _language = "en"
-_model: WhisperModel | None = None
-_whisper_broken = False  # set once faster-whisper has failed, to stop retrying it
-_tray: pystray.Icon | None = None
+
+pill: "Pill | None" = None
 
 
 def log(msg: str) -> None:
-    # Plain ASCII arrow here: --windowed builds have no real console, and when
-    # run from source some Windows terminals are still on a legacy codepage
-    # that can't encode the brand glyph (U+2192).
     print(f"[Talk-To-Text] {msg}", flush=True)
 
 
-def notify(msg: str) -> None:
-    """Show a blocking message box - reserved for real errors the user must see."""
+def notify_error(msg: str) -> None:
+    """Blocking message box - reserved for real errors the user must see."""
+    import ctypes
     threading.Thread(
-        target=lambda: ctypes.windll.user32.MessageBoxW(0, msg, APP_TITLE, 0x40),
+        target=lambda: ctypes.windll.user32.MessageBoxW(0, msg, APP_TITLE, 0x10),
         daemon=True,
     ).start()
 
 
-def status(msg: str) -> None:
-    """Non-blocking status ping (tray balloon when available, log line always)."""
-    log(msg)
-    if _tray is not None:
+def ui_call(fn) -> None:
+    """Run `fn` on the Tk main thread - hotkey callbacks fire on a different
+    thread, and Tkinter widgets may only ever be touched from the thread that
+    created them."""
+    if pill is not None:
         try:
-            _tray.notify(msg, title=APP_TITLE)
+            pill.root.after(0, fn)
+            return
         except Exception:
             pass
+    fn()
 
 
-def make_tray_icon(recording: bool) -> Image.Image:
-    """Draw a small dot icon - grey idle, red while recording. No bundled asset
-    needed, so this looks identical whether run from source or frozen by PyInstaller."""
-    size = 64
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    color = (201, 52, 58, 255) if recording else (76, 139, 245, 255)
-    draw.ellipse((4, 4, size - 4, size - 4), fill=color)
-    draw.rectangle((size // 2 - 6, 16, size // 2 + 6, 40), fill=(255, 255, 255, 255))
-    draw.arc((size // 2 - 16, 24, size // 2 + 16, 52), start=0, end=180, fill=(255, 255, 255, 255), width=4)
-    return img
+class Pill:
+    """Frameless, always-on-top floating control - mic toggle, language
+    toggle, minimize - mirroring the Chrome extension's pill UI."""
+
+    def __init__(self) -> None:
+        self.root = tk.Tk()
+        self.root.title(APP_TITLE)
+        self.root.overrideredirect(True)
+        self.root.attributes("-topmost", True)
+        self.root.configure(bg=COLOR_BORDER)
+
+        self.minimized = False
+        self._drag = {"x": 0, "y": 0}
+
+        self.outer = tk.Frame(self.root, bg=COLOR_BORDER, padx=1, pady=1)
+        self.outer.pack()
+        self.body = tk.Frame(self.outer, bg=COLOR_BG)
+        self.body.pack()
+
+        self.mic_canvas = tk.Canvas(
+            self.body, width=34, height=34, bg=COLOR_BG, highlightthickness=0
+        )
+        self.mic_oval = self.mic_canvas.create_oval(2, 2, 32, 32, fill=COLOR_MIC_IDLE, outline="")
+        self.mic_canvas.create_text(17, 17, text="●", fill=COLOR_TEXT, font=("Segoe UI", 11))
+        self.mic_canvas.pack(side="left", padx=(8, 6), pady=8)
+        self.mic_canvas.bind("<Button-1>", lambda _e: toggle_recording())
+
+        self.lang_label = tk.Label(
+            self.body, text=LANGUAGES[_language][:2].upper(), fg=COLOR_TEXT, bg=COLOR_MIC_IDLE,
+            font=("Segoe UI", 9, "bold"), padx=8, pady=4, cursor="hand2",
+        )
+        self.lang_label.pack(side="left", padx=(0, 6))
+        self.lang_label.bind("<Button-1>", lambda _e: toggle_language())
+
+        self.status_label = tk.Label(
+            self.body, text="Ready", fg=COLOR_MUTED, bg=COLOR_BG, font=("Segoe UI", 9),
+        )
+        self.status_label.pack(side="left", padx=(0, 6))
+
+        self.min_button = tk.Label(
+            self.body, text="—", fg=COLOR_MUTED, bg=COLOR_BG, font=("Segoe UI", 10),
+            padx=6, cursor="hand2",
+        )
+        self.min_button.pack(side="left", padx=(0, 8))
+        self.min_button.bind("<Button-1>", lambda _e: self.toggle_minimize())
+
+        for widget in (self.body, self.outer):
+            widget.bind("<Button-1>", self._drag_start)
+            widget.bind("<B1-Motion>", self._drag_move)
+
+        self.root.update_idletasks()
+        self._place_bottom_right()
+
+    def _place_bottom_right(self) -> None:
+        w = self.root.winfo_reqwidth()
+        h = self.root.winfo_reqheight()
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        self.root.geometry(f"{w}x{h}+{sw - w - 24}+{sh - h - 72}")
+
+    def _drag_start(self, event) -> None:
+        self._drag["x"] = event.x_root - self.root.winfo_x()
+        self._drag["y"] = event.y_root - self.root.winfo_y()
+
+    def _drag_move(self, event) -> None:
+        x = event.x_root - self._drag["x"]
+        y = event.y_root - self._drag["y"]
+        self.root.geometry(f"+{x}+{y}")
+
+    def toggle_minimize(self) -> None:
+        self.minimized = not self.minimized
+        if self.minimized:
+            self.lang_label.pack_forget()
+            self.status_label.pack_forget()
+            self.min_button.pack_forget()
+        else:
+            self.lang_label.pack(side="left", padx=(0, 6), after=self.mic_canvas)
+            self.status_label.pack(side="left", padx=(0, 6), after=self.lang_label)
+            self.min_button.pack(side="left", padx=(0, 8), after=self.status_label)
+        # Re-fit the window to its new content size without snapping it back
+        # to a fixed corner - wherever the user dragged it stays put.
+        x, y = self.root.winfo_x(), self.root.winfo_y()
+        self.root.update_idletasks()
+        w, h = self.root.winfo_reqwidth(), self.root.winfo_reqheight()
+        self.root.geometry(f"{w}x{h}+{x}+{y}")
+
+    def show(self) -> None:
+        self.root.deiconify()
+        if self.minimized:
+            self.toggle_minimize()
+
+    def set_recording(self, recording: bool) -> None:
+        self.mic_canvas.itemconfig(self.mic_oval, fill=COLOR_MIC_ON if recording else COLOR_MIC_IDLE)
+
+    def set_language(self, lang: str) -> None:
+        self.lang_label.config(text=LANGUAGES[lang][:2].upper())
+
+    def set_status(self, text: str) -> None:
+        self.status_label.config(text=text)
 
 
-def update_tray(recording: bool) -> None:
-    if _tray is None:
-        return
-    try:
-        _tray.icon = make_tray_icon(recording)
-        _tray.title = f"{APP_TITLE} - {'Listening…' if recording else 'Ready'}"
-    except Exception:
-        pass
-
-
-def get_model() -> WhisperModel | None:
-    global _model, _whisper_broken
-    if _whisper_broken:
-        return None
-    if _model is None:
-        try:
-            log(f"Loading Whisper model '{MODEL_NAME}' (first run downloads it)...")
-            _model = WhisperModel(MODEL_NAME, device="auto", compute_type="int8")
-            status("Ready")
-        except Exception as exc:
-            log(f"Whisper model unavailable ({exc}); will use Google Web Speech instead.")
-            _whisper_broken = True
-            status("Ready (online fallback)")
-            return None
-    return _model
+def status(msg: str) -> None:
+    log(msg)
+    ui_call(lambda: pill.set_status(msg) if pill else None)
 
 
 def _audio_callback(indata, frames, time_info, status_flags) -> None:
@@ -137,7 +206,7 @@ def start_recording() -> None:
         )
         _stream.start()
         _recording = True
-    update_tray(True)
+    ui_call(lambda: (pill.show(), pill.set_recording(True)) if pill else None)
     status(f"Listening... ({LANGUAGES[_language]})")
 
 
@@ -151,48 +220,36 @@ def stop_recording_and_type() -> None:
         _stream.close()
         _stream = None
         audio = np.concatenate(_frames).flatten() if _frames else np.zeros(0, np.float32)
-    update_tray(False)
+    ui_call(lambda: pill.set_recording(False) if pill else None)
     # Transcribe off the hotkey thread so the keyboard hook stays responsive.
     threading.Thread(target=_transcribe_and_type, args=(audio, _language), daemon=True).start()
 
 
-def _transcribe_with_whisper(audio: np.ndarray, language: str) -> str | None:
-    model = get_model()
-    if model is None:
-        return None
-    try:
-        segments, _ = model.transcribe(audio, language=language, beam_size=5, vad_filter=True)
-        return "".join(seg.text for seg in segments).strip()
-    except Exception as exc:
-        log(f"Whisper transcription failed ({exc}); falling back to Google Web Speech.")
-        return None
-
-
 def _transcribe_with_google(audio: np.ndarray, language: str) -> str | None:
-    try:
-        import speech_recognition as sr
-    except Exception as exc:
-        log(f"speech_recognition unavailable: {exc}")
-        return None
     try:
         pcm16 = (np.clip(audio, -1.0, 1.0) * 32767).astype(np.int16)
         audio_data = sr.AudioData(pcm16.tobytes(), SAMPLE_RATE, 2)
         recognizer = sr.Recognizer()
         tag = GOOGLE_LANG_TAGS.get(language, "en-US")
         return recognizer.recognize_google(audio_data, language=tag).strip()
+    except sr.UnknownValueError:
+        return None
+    except sr.RequestError as exc:
+        log(f"Google Web Speech request failed: {exc}")
+        notify_error(f"Couldn't reach Google's speech service:\n{exc}\n\nCheck your internet connection.")
+        return None
     except Exception as exc:
-        log(f"Google Web Speech fallback failed: {exc}")
+        log(f"Transcription failed: {exc}")
         return None
 
 
 def _transcribe_and_type(audio: np.ndarray, language: str) -> None:
     if audio.size < SAMPLE_RATE // 4:  # under 0.25 s - ignore accidental taps
         log("Recording too short, ignored.")
+        status("Ready")
         return
     status("Transcribing...")
-    text = _transcribe_with_whisper(audio, language)
-    if not text:
-        text = _transcribe_with_google(audio, language)
+    text = _transcribe_with_google(audio, language)
     if not text:
         log("No speech detected.")
         status("Ready")
@@ -229,36 +286,28 @@ def toggle_recording() -> None:
 def toggle_language() -> None:
     global _language
     _language = "he" if _language == "en" else "en"
+    ui_call(lambda: pill.set_language(_language) if pill else None)
     status(f"Language: {LANGUAGES[_language]}")
 
 
 def quit_app() -> None:
-    if _tray is not None:
-        _tray.stop()
-    sys.exit(0)
-
-
-def build_tray() -> pystray.Icon:
-    menu = pystray.Menu(
-        pystray.MenuItem("Toggle dictation (Ctrl+Shift+Space)", lambda: toggle_recording(), default=True),
-        pystray.MenuItem("Switch language (Ctrl+Shift+L)", lambda: toggle_language()),
-        pystray.MenuItem("Quit (Ctrl+Shift+Q)", lambda: quit_app()),
-    )
-    return pystray.Icon("talk-to-text", make_tray_icon(False), f"{APP_TITLE} - Ready", menu)
+    if pill is not None:
+        ui_call(pill.root.quit)
+    else:
+        sys.exit(0)
 
 
 def main() -> None:
-    global _tray
+    global pill
     log("Talk-To-Text (By Efroni) running.")
     log(f"{HOTKEY_TOGGLE}: start/stop | {HOTKEY_LANGUAGE}: language | {HOTKEY_QUIT}: quit")
+
+    pill = Pill()
     keyboard.add_hotkey(HOTKEY_TOGGLE, toggle_recording, suppress=True)
     keyboard.add_hotkey(HOTKEY_LANGUAGE, toggle_language, suppress=True)
     keyboard.add_hotkey(HOTKEY_QUIT, quit_app, suppress=True)
-    # Preload the model in the background so the first dictation is not delayed.
-    threading.Thread(target=get_model, daemon=True).start()
 
-    _tray = build_tray()
-    _tray.run()  # blocks the main thread; keeps the process alive and shows the tray icon
+    pill.root.mainloop()  # blocks the main thread; this is the real UI loop
 
 
 if __name__ == "__main__":

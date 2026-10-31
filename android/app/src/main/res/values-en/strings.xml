@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="onboarding_subtitle">A floating bubble that transcribes speech into any app - no full-screen dialog, no popups.</string>
+    <string name="perm_overlay_title">Display over other apps</string>
+    <string name="perm_overlay_desc">Needed to show the floating bubble on top of whatever you\'re using.</string>
+    <string name="perm_overlay_granted">Granted</string>
+    <string name="perm_overlay_action">Grant</string>
+    <string name="perm_mic_title">Microphone</string>
+    <string name="perm_mic_desc">Needed to hear and transcribe your speech.</string>
+    <string name="perm_mic_granted">Granted</string>
+    <string name="perm_mic_action">Grant</string>
+    <string name="perm_access_title">Accessibility service</string>
+    <string name="perm_access_desc">Lets text be typed directly into the focused field in other apps, not just the clipboard.</string>
+    <string name="perm_access_granted">Granted</string>
+    <string name="perm_access_action">Grant</string>
+    <string name="start_bubble_button">Start floating bubble</string>
+    <string name="stop_bubble_button">Stop floating bubble</string>
+    <string name="recognizer_unavailable">Speech recognition is not available on this device</string>
+    <string name="lang_toggle_label">עברית</string>
+
+    <string name="bubble_compact_desc">Talk→To→Text bubble - tap to record, long-press for settings, drag to move</string>
+    <string name="mic_toggle_desc">Start or stop listening</string>
+    <string name="copy_desc">Copy transcript to clipboard</string>
+    <string name="copy_label">Copy</string>
+    <string name="collapse_desc">Close</string>
+    <string name="clear_desc">Clear current transcript</string>
+    <string name="history_desc">Show transcript history</string>
+    <string name="history_title">Recent</string>
+    <string name="clear_history_desc">Clear all history</string>
+    <string name="delete_item_desc">Delete this transcription</string>
+    <string name="close_bubble_desc">Shut down the floating bubble</string>
+    <string name="lang_auto_short">Auto</string>
+    <string name="transcript_placeholder">Tap the mic to start…</string>
+    <string name="search_languages_hint">Search languages…</string>
+    <string name="copied_toast">Copied to clipboard</string>
+    <string name="cleared_toast">Cleared</string>
+    <string name="language_unavailable_toast">That language isn\'t available on this device - using the default instead</string>
+    <string name="injected_toast">Inserted into the active field</string>
+
+    <string name="notif_channel_name">Talk→To→Text bubble</string>
+    <string name="notif_title">Talk→To→Text is running</string>
+    <string name="notif_text">Tap to open, or tap the bubble to dictate.</string>
+
+    <string name="accessibility_service_desc">Lets Talk→To→Text type transcribed text directly into the focused text field in whatever app you\'re using.</string>
+</resources>

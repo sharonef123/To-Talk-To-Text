@@ -10,6 +10,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Bundle
@@ -36,15 +37,21 @@ import androidx.core.app.NotificationCompat
 import kotlin.math.abs
 
 /**
- * Foreground service that owns one small floating window (the "bubble"):
- * compact circular state, an expanded horizontal pill, and a language-picker
- * panel - all three are children of the same root view, toggled by
- * visibility, so there is only ever one WindowManager window to manage.
+ * Foreground service that owns one small floating window: a 48dp circular
+ * bubble that is the single persistent control. A tap starts/stops
+ * recording right there (the bubble glows red while listening); a
+ * long-press opens a settings panel (language picker, transcript history,
+ * close); dragging moves it, releasing snaps it to the nearest edge.
  *
  * Speech recognition runs entirely in-process via SpeechRecognizer with a
- * headless RecognitionListener; the OS's full-screen "Speak now" dialog
- * (RecognizerIntent.ACTION_RECOGNIZE_SPEECH launched as an Activity) is never
- * invoked anywhere in this app.
+ * headless RecognitionListener - the OS's full-screen "Speak now" dialog is
+ * never invoked anywhere in this app. Finalized text is delivered straight
+ * into whatever field has focus system-wide via TalkToTextAccessibilityService
+ * (ACTION_SET_TEXT on the focused AccessibilityNodeInfo - a WindowManager
+ * overlay has no way to hold focus in another app's field, so this is the
+ * only mechanism that can actually type into other apps), with the
+ * clipboard always kept in sync as a backup regardless of whether that
+ * service is enabled.
  */
 class OverlayBubbleService : Service() {
 
@@ -56,6 +63,8 @@ class OverlayBubbleService : Service() {
         private const val NOTIF_ID = 1
         private const val EDGE_MARGIN_DP = 2
         private const val AUTO_LOCK_WORD_COUNT = 2
+        private const val LONG_PRESS_MS = 450L
+        private const val MOVE_THRESHOLD_DP = 6
     }
 
     private lateinit var windowManager: WindowManager
@@ -63,23 +72,12 @@ class OverlayBubbleService : Service() {
     private lateinit var root: FrameLayout
 
     private lateinit var compactBubble: FrameLayout
-    private lateinit var compactRecDot: View
-    private lateinit var expandedPill: LinearLayout
-    private lateinit var languagePanel: LinearLayout
-    private lateinit var micButton: FrameLayout
-    private lateinit var micIcon: android.widget.ImageView
-    private lateinit var langChip: TextView
-    private lateinit var transcriptPreview: TextView
-    private lateinit var copyButton: FrameLayout
-    private lateinit var clearButton: FrameLayout
-    private lateinit var historyButton: FrameLayout
-    private lateinit var collapseButton: FrameLayout
+    private lateinit var settingsPanel: LinearLayout
     private lateinit var languageSearch: EditText
     private lateinit var languageList: LinearLayout
-    private lateinit var historyPanel: LinearLayout
-    private lateinit var historyList: LinearLayout
     private lateinit var historyClearButton: FrameLayout
-    private lateinit var historyCloseButton: FrameLayout
+    private lateinit var historyList: LinearLayout
+    private lateinit var closeBubbleButton: TextView
 
     private var recognizer: SpeechRecognizer? = null
     private var listening = false
@@ -87,7 +85,6 @@ class OverlayBubbleService : Service() {
     private var pendingLanguage: SpeechLanguage? = null
     private var utteranceWordCount = 0
     private var utteranceLocked = false
-    private var currentTranscript = ""
     private val transcriptHistory = mutableListOf<String>()
     // Populated asynchronously (if the device's recognizer answers at all) by
     // ACTION_GET_LANGUAGE_DETAILS; null means "unknown", in which case we
@@ -96,6 +93,8 @@ class OverlayBubbleService : Service() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var restartRunnable: Runnable? = null
+    private var longPressRunnable: Runnable? = null
+    private var glowAnimator: ValueAnimator? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -116,6 +115,8 @@ class OverlayBubbleService : Service() {
         super.onDestroy()
         isRunning = false
         restartRunnable?.let { mainHandler.removeCallbacks(it) }
+        longPressRunnable?.let { mainHandler.removeCallbacks(it) }
+        glowAnimator?.cancel()
         recognizer?.destroy()
         recognizer = null
         try {
@@ -133,23 +134,12 @@ class OverlayBubbleService : Service() {
         root = inflater.inflate(R.layout.overlay_bubble, null) as FrameLayout
 
         compactBubble = root.findViewById(R.id.compactBubble)
-        compactRecDot = root.findViewById(R.id.compactRecDot)
-        expandedPill = root.findViewById(R.id.expandedPill)
-        languagePanel = root.findViewById(R.id.languagePanel)
-        micButton = root.findViewById(R.id.micButton)
-        micIcon = root.findViewById(R.id.micIcon)
-        langChip = root.findViewById(R.id.langChip)
-        transcriptPreview = root.findViewById(R.id.transcriptPreview)
-        copyButton = root.findViewById(R.id.copyButton)
-        clearButton = root.findViewById(R.id.clearButton)
-        historyButton = root.findViewById(R.id.historyButton)
-        collapseButton = root.findViewById(R.id.collapseButton)
+        settingsPanel = root.findViewById(R.id.settingsPanel)
         languageSearch = root.findViewById(R.id.languageSearch)
         languageList = root.findViewById(R.id.languageList)
-        historyPanel = root.findViewById(R.id.historyPanel)
-        historyList = root.findViewById(R.id.historyList)
         historyClearButton = root.findViewById(R.id.historyClearButton)
-        historyCloseButton = root.findViewById(R.id.historyCloseButton)
+        historyList = root.findViewById(R.id.historyList)
+        closeBubbleButton = root.findViewById(R.id.closeBubbleButton)
 
         val overlayType =
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -160,7 +150,7 @@ class OverlayBubbleService : Service() {
             WindowManager.LayoutParams.WRAP_CONTENT,
             overlayType,
             // FLAG_NOT_TOUCH_MODAL is the important one here: without it, this
-            // window - once it becomes focusable (see openLanguagePanel) - can
+            // window - once it becomes focusable (see openSettingsPanel) - can
             // end up swallowing touches across the WHOLE screen instead of
             // just its own small bounds, which reads as "everything froze".
             // It stays set at all times; only FLAG_NOT_FOCUSABLE is ever toggled.
@@ -178,7 +168,7 @@ class OverlayBubbleService : Service() {
     }
 
     /* ------------------------------------------------------------------ */
-    /* drag + snap (compact bubble only)                                   */
+    /* gesture: tap = toggle recording, long-press = settings, drag = move */
     /* ------------------------------------------------------------------ */
     private fun wireInteractions() {
         var downRawX = 0f
@@ -186,6 +176,7 @@ class OverlayBubbleService : Service() {
         var downParamX = 0
         var downParamY = 0
         var moved = false
+        var longPressFired = false
 
         compactBubble.setOnTouchListener { _, event ->
             when (event.action) {
@@ -195,12 +186,22 @@ class OverlayBubbleService : Service() {
                     downParamX = params.x
                     downParamY = params.y
                     moved = false
+                    longPressFired = false
+                    val runnable = Runnable {
+                        longPressFired = true
+                        openSettingsPanel()
+                    }
+                    longPressRunnable = runnable
+                    mainHandler.postDelayed(runnable, LONG_PRESS_MS)
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = event.rawX - downRawX
                     val dy = event.rawY - downRawY
-                    if (abs(dx) > dp(3) || abs(dy) > dp(3)) moved = true
+                    if (!moved && (abs(dx) > dp(MOVE_THRESHOLD_DP) || abs(dy) > dp(MOVE_THRESHOLD_DP))) {
+                        moved = true
+                        longPressRunnable?.let { mainHandler.removeCallbacks(it) }
+                    }
                     if (moved) {
                         params.x = downParamX + dx.toInt()
                         params.y = downParamY + dy.toInt()
@@ -209,21 +210,24 @@ class OverlayBubbleService : Service() {
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    if (moved) snapToNearestEdge() else expand()
+                    longPressRunnable?.let { mainHandler.removeCallbacks(it) }
+                    when {
+                        longPressFired -> { /* already handled when the timer fired */ }
+                        moved -> snapToNearestEdge()
+                        else -> toggleListening()
+                    }
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    longPressRunnable?.let { mainHandler.removeCallbacks(it) }
                     true
                 }
                 else -> false
             }
         }
 
-        micButton.setOnClickListener { toggleListening() }
-        copyButton.setOnClickListener { copyTranscript() }
-        clearButton.setOnClickListener { clearCurrentTranscript() }
-        historyButton.setOnClickListener { openHistoryPanel() }
-        collapseButton.setOnClickListener { collapse() }
-        langChip.setOnClickListener { openLanguagePanel() }
         historyClearButton.setOnClickListener { clearAllHistory() }
-        historyCloseButton.setOnClickListener { closeHistoryPanel() }
+        closeBubbleButton.setOnClickListener { stopSelf() }
 
         languageSearch.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
@@ -265,61 +269,28 @@ class OverlayBubbleService : Service() {
     }
 
     /* ------------------------------------------------------------------ */
-    /* compact / expanded / language-panel states                          */
+    /* compact bubble <-> settings panel                                   */
     /* ------------------------------------------------------------------ */
-    private fun expand() {
-        compactBubble.visibility = View.GONE
-        languagePanel.visibility = View.GONE
-        historyPanel.visibility = View.GONE
-        expandedPill.visibility = View.VISIBLE
-        clampIntoScreen()
-    }
-
-    private fun collapse() {
-        closeLanguagePanel()
-        closeHistoryPanel()
-        expandedPill.visibility = View.GONE
-        languagePanel.visibility = View.GONE
-        historyPanel.visibility = View.GONE
-        compactBubble.visibility = View.VISIBLE
-        clampIntoScreen()
-    }
-
-    private fun openHistoryPanel() {
+    private fun openSettingsPanel() {
         populateHistoryList()
-        expandedPill.visibility = View.GONE
-        historyPanel.visibility = View.VISIBLE
-        clampIntoScreen()
-    }
-
-    private fun closeHistoryPanel() {
-        if (historyPanel.visibility != View.VISIBLE) return
-        historyPanel.visibility = View.GONE
-        expandedPill.visibility = View.VISIBLE
-        clampIntoScreen()
-    }
-
-    private fun openLanguagePanel() {
-        expandedPill.visibility = View.GONE
-        languagePanel.visibility = View.VISIBLE
-        clampIntoScreen()
+        compactBubble.visibility = View.GONE
+        settingsPanel.visibility = View.VISIBLE
         // A text field inside an overlay needs real input focus for the IME
-        // to appear, so briefly drop FLAG_NOT_FOCUSABLE while the panel is up.
+        // to appear if tapped, so drop FLAG_NOT_FOCUSABLE while the panel is up.
         params.flags = params.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+        clampIntoScreen()
         safeUpdateLayout()
-        languageSearch.requestFocus()
-        val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
-        imm.showSoftInput(languageSearch, InputMethodManager.SHOW_IMPLICIT)
     }
 
-    private fun closeLanguagePanel() {
-        if (languagePanel.visibility != View.VISIBLE) return
+    private fun closeSettingsPanel() {
+        if (settingsPanel.visibility != View.VISIBLE) return
         val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
         imm.hideSoftInputFromWindow(languageSearch.windowToken, 0)
         params.flags = params.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
         languageSearch.setText("")
-        languagePanel.visibility = View.GONE
-        expandedPill.visibility = View.VISIBLE
+        settingsPanel.visibility = View.GONE
+        compactBubble.visibility = View.VISIBLE
+        clampIntoScreen()
         safeUpdateLayout()
     }
 
@@ -351,91 +322,22 @@ class OverlayBubbleService : Service() {
     private fun getColorCompat(resId: Int): Int =
         androidx.core.content.ContextCompat.getColor(this, resId)
 
-    /* ------------------------------------------------------------------ */
-    /* transcript history                                                  */
-    /* ------------------------------------------------------------------ */
-    private fun populateHistoryList() {
-        historyList.removeAllViews()
-        if (transcriptHistory.isEmpty()) {
-            val empty = TextView(this)
-            empty.text = getString(R.string.transcript_placeholder)
-            empty.setTextColor(getColorCompat(R.color.ttt_text_muted))
-            empty.textSize = 12f
-            empty.setPadding(dp(14), dp(18), dp(14), dp(18))
-            historyList.addView(empty)
-            return
-        }
-        for (entry in transcriptHistory) {
-            val row = LinearLayout(this)
-            row.orientation = LinearLayout.HORIZONTAL
-            row.gravity = Gravity.CENTER_VERTICAL
-            row.setPadding(dp(10), dp(8), dp(10), dp(8))
-
-            val text = TextView(this)
-            text.text = entry
-            text.setTextColor(getColorCompat(R.color.ttt_text_primary))
-            text.textSize = 12f
-            text.maxLines = 2
-            val textParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            text.layoutParams = textParams
-
-            val copy = TextView(this)
-            copy.text = getString(R.string.copy_label)
-            copy.setTextColor(getColorCompat(R.color.ttt_accent))
-            copy.textSize = 12f
-            copy.setPadding(dp(10), dp(4), dp(0), dp(4))
-            copy.setOnClickListener {
-                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                clipboard.setPrimaryClip(ClipData.newPlainText("Talk-To-Text", entry))
-                Toast.makeText(this, R.string.copied_toast, Toast.LENGTH_SHORT).show()
-            }
-
-            row.addView(text)
-            row.addView(copy)
-            historyList.addView(row)
-        }
-    }
-
-    private fun pushHistory(text: String) {
-        val trimmed = text.trim()
-        if (trimmed.isEmpty()) return
-        transcriptHistory.add(0, trimmed)
-        while (transcriptHistory.size > 20) transcriptHistory.removeAt(transcriptHistory.size - 1)
-    }
-
-    private fun clearAllHistory() {
-        transcriptHistory.clear()
-        populateHistoryList()
-        Toast.makeText(this, R.string.cleared_toast, Toast.LENGTH_SHORT).show()
-    }
-
-    private fun clearCurrentTranscript() {
-        currentTranscript = ""
-        transcriptPreview.text = getString(R.string.transcript_placeholder)
-    }
-
     private fun selectLanguage(lang: SpeechLanguage) {
         if (utteranceLocked && listening) {
             // Mid-utterance: queue it so the swap lands between sentences,
             // never jarringly mid-word.
             pendingLanguage = lang
-            langChip.text = chipLabel(lang) + " …"
         } else {
             applyLanguage(lang)
         }
-        closeLanguagePanel()
+        closeSettingsPanel()
     }
 
     private fun applyLanguage(lang: SpeechLanguage) {
         selectedLanguage = lang
         pendingLanguage = null
-        langChip.text = chipLabel(lang)
         if (listening) restartListening()
     }
-
-    private fun chipLabel(lang: SpeechLanguage): String =
-        if (lang == Languages.AUTO_DETECT) getString(R.string.lang_auto_short)
-        else lang.tag.substringBefore('-').uppercase()
 
     /* ------------------------------------------------------------------ */
     /* speech recognition                                                  */
@@ -475,21 +377,20 @@ class OverlayBubbleService : Service() {
         // Proactive check: if we already know (from querySupportedLanguages)
         // that this language's pack isn't on the device, don't even try it -
         // drop straight to Auto rather than starting a session that's certain
-        // to fail and hang the mic button in a "listening" state.
+        // to fail and hang the mic in a "listening" state.
         if (selectedLanguage != Languages.AUTO_DETECT && isLanguageKnownUnsupported(selectedLanguage.tag)) {
             Toast.makeText(this, R.string.language_unavailable_toast, Toast.LENGTH_SHORT).show()
             selectedLanguage = Languages.AUTO_DETECT
-            langChip.text = chipLabel(selectedLanguage)
         }
         listening = true
         utteranceWordCount = 0
         utteranceLocked = false
-        updateMicUi()
+        updateRecordingUi()
         try {
             ensureRecognizer().startListening(buildRecognizerIntent())
         } catch (_: Exception) {
             listening = false
-            updateMicUi()
+            updateRecordingUi()
         }
     }
 
@@ -511,7 +412,7 @@ class OverlayBubbleService : Service() {
         } catch (_: Exception) {
             /* ignore */
         }
-        updateMicUi()
+        updateRecordingUi()
     }
 
     private fun scheduleRestart(delayMs: Long) {
@@ -522,15 +423,30 @@ class OverlayBubbleService : Service() {
         mainHandler.postDelayed(r, delayMs)
     }
 
-    private fun updateMicUi() {
-        micIcon.isSelected = listening
-        micButton.setBackgroundResource(R.drawable.mic_circle_bg)
-        micButton.backgroundTintList = if (listening) {
-            android.content.res.ColorStateList.valueOf(getColorCompat(R.color.ttt_recording))
+    private fun updateRecordingUi() {
+        if (listening) {
+            compactBubble.backgroundTintList = ColorStateList.valueOf(getColorCompat(R.color.ttt_recording))
+            startGlowPulse()
         } else {
-            null
+            compactBubble.backgroundTintList = null
+            stopGlowPulse()
         }
-        compactRecDot.visibility = if (listening) View.VISIBLE else View.GONE
+    }
+
+    private fun startGlowPulse() {
+        if (glowAnimator?.isRunning == true) return
+        val animator = ValueAnimator.ofFloat(1f, 0.55f, 1f)
+        animator.duration = 900
+        animator.repeatCount = ValueAnimator.INFINITE
+        animator.addUpdateListener { compactBubble.alpha = it.animatedValue as Float }
+        animator.start()
+        glowAnimator = animator
+    }
+
+    private fun stopGlowPulse() {
+        glowAnimator?.cancel()
+        glowAnimator = null
+        compactBubble.alpha = 1f
     }
 
     private fun wordCount(text: String): Int =
@@ -546,19 +462,15 @@ class OverlayBubbleService : Service() {
         override fun onPartialResults(partialResults: Bundle?) {
             val text = bestText(partialResults) ?: return
             maybeLockUtterance(text)
-            // Replace, don't append: the preview always shows just the
-            // in-progress utterance, not an ever-growing wall of text.
-            transcriptPreview.text = text
         }
 
         override fun onResults(results: Bundle?) {
             val text = bestText(results)
             if (!text.isNullOrBlank()) {
-                maybeLockUtterance(text)
-                currentTranscript = text.trim()
-                transcriptPreview.text = currentTranscript
-                pushHistory(currentTranscript)
-                autoCopyToClipboard(currentTranscript)
+                val trimmed = text.trim()
+                maybeLockUtterance(trimmed)
+                pushHistory(trimmed)
+                deliverFinalText(trimmed)
             }
             utteranceWordCount = 0
             utteranceLocked = false
@@ -583,13 +495,13 @@ class OverlayBubbleService : Service() {
                     } else {
                         // Even the device default failed - stop instead of looping forever.
                         listening = false
-                        updateMicUi()
+                        updateRecordingUi()
                         Toast.makeText(this@OverlayBubbleService, R.string.recognizer_unavailable, Toast.LENGTH_SHORT).show()
                     }
                 }
                 SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> {
                     listening = false
-                    updateMicUi()
+                    updateRecordingUi()
                     Toast.makeText(this@OverlayBubbleService, R.string.recognizer_unavailable, Toast.LENGTH_SHORT).show()
                 }
                 else -> scheduleRestart(500)
@@ -614,19 +526,91 @@ class OverlayBubbleService : Service() {
         return list?.firstOrNull()
     }
 
-    private fun copyTranscript() {
-        val text = currentTranscript.trim()
-        if (text.isEmpty()) return
+    /* ------------------------------------------------------------------ */
+    /* delivering text: accessibility injection first, clipboard always    */
+    /* ------------------------------------------------------------------ */
+    private fun deliverFinalText(text: String) {
+        TalkToTextAccessibilityService.instance?.insertTextIntoFocusedField("$text ")
+        // The clipboard is kept in sync regardless of whether injection
+        // succeeded - it's the guaranteed fallback the user can always paste
+        // from, matching how the Windows/Chrome builds behave.
         autoCopyToClipboard(text)
-        Toast.makeText(this, R.string.copied_toast, Toast.LENGTH_SHORT).show()
     }
 
-    // Every finalized utterance lands on the clipboard automatically, with no
-    // toast - the explicit copy button (above) is the one that confirms itself.
     private fun autoCopyToClipboard(text: String) {
         if (text.isBlank()) return
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("Talk-To-Text", text))
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* transcript history                                                  */
+    /* ------------------------------------------------------------------ */
+    private fun populateHistoryList() {
+        historyList.removeAllViews()
+        if (transcriptHistory.isEmpty()) {
+            val empty = TextView(this)
+            empty.text = getString(R.string.transcript_placeholder)
+            empty.setTextColor(getColorCompat(R.color.ttt_text_muted))
+            empty.textSize = 12f
+            empty.setPadding(dp(14), dp(18), dp(14), dp(18))
+            historyList.addView(empty)
+            return
+        }
+        transcriptHistory.forEachIndexed { idx, entry ->
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            row.gravity = Gravity.CENTER_VERTICAL
+            row.setPadding(dp(10), dp(8), dp(10), dp(8))
+
+            val text = TextView(this)
+            text.text = entry
+            text.setTextColor(getColorCompat(R.color.ttt_text_primary))
+            text.textSize = 12f
+            text.maxLines = 2
+            text.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+
+            val copy = TextView(this)
+            copy.text = getString(R.string.copy_label)
+            copy.setTextColor(getColorCompat(R.color.ttt_accent))
+            copy.textSize = 12f
+            copy.setPadding(dp(10), dp(4), dp(6), dp(4))
+            copy.setOnClickListener {
+                autoCopyToClipboard(entry)
+                Toast.makeText(this, R.string.copied_toast, Toast.LENGTH_SHORT).show()
+            }
+
+            val delete = TextView(this)
+            delete.text = "✕"
+            delete.contentDescription = getString(R.string.delete_item_desc)
+            delete.setTextColor(getColorCompat(R.color.ttt_text_muted))
+            delete.textSize = 12f
+            delete.setPadding(dp(6), dp(4), dp(0), dp(4))
+            delete.setOnClickListener { deleteHistoryItem(idx) }
+
+            row.addView(text)
+            row.addView(copy)
+            row.addView(delete)
+            historyList.addView(row)
+        }
+    }
+
+    private fun pushHistory(text: String) {
+        if (text.isEmpty()) return
+        transcriptHistory.add(0, text)
+        while (transcriptHistory.size > 20) transcriptHistory.removeAt(transcriptHistory.size - 1)
+    }
+
+    private fun deleteHistoryItem(idx: Int) {
+        if (idx < 0 || idx >= transcriptHistory.size) return
+        transcriptHistory.removeAt(idx)
+        populateHistoryList()
+    }
+
+    private fun clearAllHistory() {
+        transcriptHistory.clear()
+        populateHistoryList()
+        Toast.makeText(this, R.string.cleared_toast, Toast.LENGTH_SHORT).show()
     }
 
     /* ------------------------------------------------------------------ */

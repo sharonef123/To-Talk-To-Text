@@ -38,17 +38,26 @@ Invoke-Python @("-m", "pip", "install", "--upgrade", "-r", (Join-Path $Win "requ
 # Convert the 128px PNG into a multi-size .ico for the exe icon
 Invoke-Python @("-c", "from PIL import Image; Image.open(r'$Root\icons\icon128.png').save(r'$Icon', sizes=[(16,16),(32,32),(48,48),(128,128)])")
 
-# ctranslate2 ships model-conversion helpers (ctranslate2.converters.*) that
-# pull in torch/tensorflow/transformers etc. dictate.py only does inference
-# (never model conversion), so these - and other heavy frameworks that end up
-# on PATH in a shared/global site-packages but are never imported by this
-# script - are excluded to keep the onefile build from ballooning to 300+ MB.
+# dictate.py only ever calls speech_recognition's recognize_google (plain
+# urllib HTTP calls - no heavy deps of its own). But speech_recognition's own
+# __init__.py unconditionally *tries* to import ALL of its optional engine
+# backends (recognize_whisper, recognize_faster_whisper, recognize_openai,
+# recognize_groq, recognize_cohere_api, recognize_sphinx) so it can monkey-
+# patch whichever ones succeed onto the Recognizer class. Those backends'
+# own torch/faster_whisper/openai/etc. imports are all TYPE_CHECKING-guarded
+# or lazy-inside-the-function, so excluding the heavy packages below from
+# the bundle is safe - it can't affect recognize_google, which lives in the
+# same try/except but has no such dependency itself - and keeps the onefile
+# build from pulling in multiple hundred MB of unrelated ML frameworks that
+# happen to be installed in this shared/global site-packages.
 $ExcludeModules = @(
     "torch", "torchvision", "torchaudio", "torchmetrics",
     "pytorch_lightning", "lightning", "tensorflow",
     "sklearn", "pandas", "matplotlib", "sympy", "sqlalchemy",
     "networkx", "grpc", "pdfminer", "fontTools", "pygments",
-    "transformers", "fairseq", "opennmt_py", "eole"
+    "transformers", "fairseq", "opennmt_py", "eole",
+    "faster_whisper", "ctranslate2", "whisper", "openai", "groq",
+    "cohere", "vosk", "pocketsphinx"
 )
 $ExcludeArgs = @()
 foreach ($m in $ExcludeModules) { $ExcludeArgs += @("--exclude-module", $m) }
@@ -60,9 +69,7 @@ $PyInstallerArgs = @(
     "--icon", $Icon,
     "--distpath", $Dist,
     "--workpath", (Join-Path $Build "work"),
-    "--specpath", $Build,
-    "--collect-data", "faster_whisper",
-    "--collect-binaries", "ctranslate2"
+    "--specpath", $Build
 )
 $PyInstallerArgs += $ExcludeArgs
 $PyInstallerArgs += (Join-Path $Win "dictate.py")

@@ -1,17 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Single root the service adds to the WindowManager. Only one of the three
-  direct children is visible at a time; the others are GONE (not INVISIBLE)
-  so the root FrameLayout's wrap_content size - and therefore the overlay
-  window's actual touchable/blocking footprint - shrinks back down to just
-  the compact bubble whenever the pill or language panel isn't showing.
+  Single root the service adds to the WindowManager. The compact bubble is
+  the ONLY persistent control - a single tap starts/stops recording right
+  there (the whole circle glows red while listening), a long-press opens the
+  settings panel (language + history + close), and dragging moves it. Only
+  one of {compactBubble, settingsPanel} is VISIBLE at a time; the other is
+  GONE (not INVISIBLE) so the root's wrap_content size - and so the overlay
+  window's actual touchable footprint - shrinks back to just the bubble
+  whenever the panel isn't open.
 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/overlayRoot"
     android:layout_width="wrap_content"
     android:layout_height="wrap_content">
 
-    <!-- Compact state: 48dp circular bubble, draggable, snaps to an edge. -->
     <FrameLayout
         android:id="@+id/compactBubble"
         android:layout_width="48dp"
@@ -26,138 +28,12 @@
             android:layout_gravity="center"
             android:src="@mipmap/ic_launcher"
             android:contentDescription="@string/bubble_compact_desc" />
-
-        <View
-            android:id="@+id/compactRecDot"
-            android:layout_width="10dp"
-            android:layout_height="10dp"
-            android:layout_gravity="top|end"
-            android:layout_margin="4dp"
-            android:background="@drawable/bubble_circle_bg"
-            android:backgroundTint="@color/ttt_recording"
-            android:visibility="gone" />
     </FrameLayout>
 
-    <!-- Expanded state: horizontal pill - mic toggle, language chip, live
-         transcript preview, copy, close (collapse back to the bubble). -->
+    <!-- Settings panel: language picker + transcript history + close bubble. -->
     <LinearLayout
-        android:id="@+id/expandedPill"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:background="@drawable/pill_bg"
-        android:elevation="6dp"
-        android:padding="6dp"
-        android:visibility="gone">
-
-        <FrameLayout
-            android:id="@+id/micButton"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:background="@drawable/mic_circle_bg">
-
-            <ImageView
-                android:id="@+id/micIcon"
-                android:layout_width="22dp"
-                android:layout_height="22dp"
-                android:layout_gravity="center"
-                android:src="@drawable/ic_mic"
-                android:contentDescription="@string/mic_toggle_desc" />
-        </FrameLayout>
-
-        <TextView
-            android:id="@+id/langChip"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="6dp"
-            android:background="@drawable/chip_bg"
-            android:paddingStart="12dp"
-            android:paddingEnd="12dp"
-            android:paddingTop="8dp"
-            android:paddingBottom="8dp"
-            android:textSize="12sp"
-            android:textStyle="bold"
-            android:textColor="@color/ttt_text_primary"
-            android:text="@string/lang_auto_short" />
-
-        <TextView
-            android:id="@+id/transcriptPreview"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:layout_marginStart="10dp"
-            android:layout_marginEnd="6dp"
-            android:maxWidth="110dp"
-            android:maxLines="2"
-            android:ellipsize="end"
-            android:textSize="12sp"
-            android:textColor="@color/ttt_text_muted"
-            android:text="@string/transcript_placeholder" />
-
-        <FrameLayout
-            android:id="@+id/copyButton"
-            android:layout_width="32dp"
-            android:layout_height="32dp"
-            android:background="@drawable/mic_circle_bg">
-
-            <ImageView
-                android:layout_width="17dp"
-                android:layout_height="17dp"
-                android:layout_gravity="center"
-                android:src="@drawable/ic_copy"
-                android:contentDescription="@string/copy_desc" />
-        </FrameLayout>
-
-        <FrameLayout
-            android:id="@+id/clearButton"
-            android:layout_width="32dp"
-            android:layout_height="32dp"
-            android:layout_marginStart="2dp"
-            android:background="@drawable/mic_circle_bg">
-
-            <ImageView
-                android:layout_width="16dp"
-                android:layout_height="16dp"
-                android:layout_gravity="center"
-                android:src="@drawable/ic_close"
-                android:contentDescription="@string/clear_desc" />
-        </FrameLayout>
-
-        <FrameLayout
-            android:id="@+id/historyButton"
-            android:layout_width="32dp"
-            android:layout_height="32dp"
-            android:layout_marginStart="2dp"
-            android:background="@drawable/mic_circle_bg">
-
-            <ImageView
-                android:layout_width="16dp"
-                android:layout_height="16dp"
-                android:layout_gravity="center"
-                android:src="@drawable/ic_history"
-                android:contentDescription="@string/history_desc" />
-        </FrameLayout>
-
-        <FrameLayout
-            android:id="@+id/collapseButton"
-            android:layout_width="28dp"
-            android:layout_height="28dp"
-            android:layout_marginStart="2dp">
-
-            <ImageView
-                android:layout_width="14dp"
-                android:layout_height="14dp"
-                android:layout_gravity="center"
-                android:src="@drawable/ic_chevron_down"
-                android:contentDescription="@string/collapse_desc" />
-        </FrameLayout>
-    </LinearLayout>
-
-    <!-- Language panel: search box + scrollable list, shown over the pill. -->
-    <LinearLayout
-        android:id="@+id/languagePanel"
-        android:layout_width="260dp"
+        android:id="@+id/settingsPanel"
+        android:layout_width="280dp"
         android:layout_height="wrap_content"
         android:orientation="vertical"
         android:background="@drawable/panel_bg"
@@ -184,7 +60,7 @@
 
         <ScrollView
             android:layout_width="match_parent"
-            android:layout_height="260dp"
+            android:layout_height="170dp"
             android:layout_marginTop="8dp"
             android:scrollbars="vertical">
 
@@ -194,25 +70,19 @@
                 android:layout_height="wrap_content"
                 android:orientation="vertical" />
         </ScrollView>
-    </LinearLayout>
 
-    <!-- History panel: last N finalized transcripts, each with a copy button,
-         plus a "clear all" action - shown over the pill. -->
-    <LinearLayout
-        android:id="@+id/historyPanel"
-        android:layout_width="260dp"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:background="@drawable/panel_bg"
-        android:elevation="8dp"
-        android:visibility="gone">
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="10dp"
+            android:background="@color/ttt_surface_border" />
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
             android:gravity="center_vertical"
-            android:padding="10dp">
+            android:layout_marginTop="8dp">
 
             <TextView
                 android:layout_width="0dp"
@@ -235,24 +105,12 @@
                     android:src="@drawable/ic_history_clear"
                     android:contentDescription="@string/clear_history_desc" />
             </FrameLayout>
-
-            <FrameLayout
-                android:id="@+id/historyCloseButton"
-                android:layout_width="26dp"
-                android:layout_height="26dp">
-
-                <ImageView
-                    android:layout_width="14dp"
-                    android:layout_height="14dp"
-                    android:layout_gravity="center"
-                    android:src="@drawable/ic_close"
-                    android:contentDescription="@string/collapse_desc" />
-            </FrameLayout>
         </LinearLayout>
 
         <ScrollView
             android:layout_width="match_parent"
-            android:layout_height="260dp"
+            android:layout_height="170dp"
+            android:layout_marginTop="4dp"
             android:scrollbars="vertical">
 
             <LinearLayout
@@ -261,6 +119,25 @@
                 android:layout_height="wrap_content"
                 android:orientation="vertical" />
         </ScrollView>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="10dp"
+            android:background="@color/ttt_surface_border" />
+
+        <TextView
+            android:id="@+id/closeBubbleButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:gravity="center"
+            android:padding="10dp"
+            android:text="@string/close_bubble_desc"
+            android:textColor="@color/ttt_recording"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
     </LinearLayout>
 
 </FrameLayout>
