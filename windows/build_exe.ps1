@@ -36,7 +36,7 @@ New-Item -ItemType Directory -Force -Path $Build, $Dist | Out-Null
 Invoke-Python @("-m", "pip", "install", "--upgrade", "-r", (Join-Path $Win "requirements.txt"))
 
 # Convert the 128px PNG into a multi-size .ico for the exe icon
-Invoke-Python @("-c", "from PIL import Image; Image.open(r'$Root\icons\icon128.png').save(r'$Icon', sizes=[(16,16),(32,32),(48,48),(128,128)])")
+Invoke-Python @("-c", "from PIL import Image; Image.open(r'$Root\chrome\icons\icon128.png').save(r'$Icon', sizes=[(16,16),(32,32),(48,48),(128,128)])")
 
 # dictate.py only ever calls speech_recognition's recognize_google (plain
 # urllib HTTP calls - no heavy deps of its own). But speech_recognition's own
@@ -64,7 +64,7 @@ foreach ($m in $ExcludeModules) { $ExcludeArgs += @("--exclude-module", $m) }
 
 $PyInstallerArgs = @(
     "-m", "PyInstaller",
-    "--noconfirm", "--onefile", "--windowed",
+    "--noconfirm", "--onefile", "--windowed", "--noconsole",
     "--name", $AppName,
     "--icon", $Icon,
     "--distpath", $Dist,

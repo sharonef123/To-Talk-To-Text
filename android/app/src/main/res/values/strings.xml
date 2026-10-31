@@ -18,10 +18,6 @@
     <string name="perm_mic_desc">נדרש כדי לשמוע ולתמלל את הדיבור שלך.</string>
     <string name="perm_mic_granted">אושר</string>
     <string name="perm_mic_action">אשר</string>
-    <string name="perm_access_title">שירות נגישות</string>
-    <string name="perm_access_desc">מאפשר הזרקת טקסט ישירות לשדה הפעיל באפליקציות אחרות, לא רק ללוח.</string>
-    <string name="perm_access_granted">אושר</string>
-    <string name="perm_access_action">אשר</string>
     <string name="start_bubble_button">הפעל בועה צפה</string>
     <string name="stop_bubble_button">עצור בועה צפה</string>
     <string name="recognizer_unavailable">זיהוי דיבור אינו זמין במכשיר זה</string>
@@ -45,13 +41,10 @@
     <string name="copied_toast">הועתק ללוח</string>
     <string name="cleared_toast">נוקה</string>
     <string name="language_unavailable_toast">השפה הזו אינה מותקנת במכשיר - עובר לברירת המחדל</string>
-    <string name="injected_toast">הוזרק לשדה הפעיל</string>
+    <string name="paste_hint">הדבק</string>
 
     <!-- Foreground service notification -->
     <string name="notif_channel_name">בועת Talk→To→Text</string>
     <string name="notif_title">Talk→To→Text פעיל</string>
     <string name="notif_text">הקש לפתיחה, או הקש על הבועה להתמלל.</string>
-
-    <!-- Accessibility service description shown in system Settings -->
-    <string name="accessibility_service_desc">מאפשר ל-Talk→To→Text להזריק טקסט מתומלל ישירות לשדה הטקסט הפעיל באפליקציה שבה אתה נמצא.</string>
 </resources>

@@ -45,13 +45,13 @@ import kotlin.math.abs
  *
  * Speech recognition runs entirely in-process via SpeechRecognizer with a
  * headless RecognitionListener - the OS's full-screen "Speak now" dialog is
- * never invoked anywhere in this app. Finalized text is delivered straight
- * into whatever field has focus system-wide via TalkToTextAccessibilityService
- * (ACTION_SET_TEXT on the focused AccessibilityNodeInfo - a WindowManager
- * overlay has no way to hold focus in another app's field, so this is the
- * only mechanism that can actually type into other apps), with the
- * clipboard always kept in sync as a backup regardless of whether that
- * service is enabled.
+ * never invoked anywhere in this app. Finalized text is copied straight to
+ * the clipboard, and a small "paste" hint briefly appears next to the
+ * bubble as a reminder. There is deliberately no AccessibilityService: that
+ * capability is the same one real malware abuses to read/inject into other
+ * apps' screens, and declaring BIND_ACCESSIBILITY_SERVICE gets sideloaded
+ * APKs flagged hard by Play Protect and most antivirus scanners - not worth
+ * it for a convenience the clipboard already covers.
  */
 class OverlayBubbleService : Service() {
 
@@ -72,6 +72,7 @@ class OverlayBubbleService : Service() {
     private lateinit var root: FrameLayout
 
     private lateinit var compactBubble: FrameLayout
+    private lateinit var pasteHint: TextView
     private lateinit var settingsPanel: LinearLayout
     private lateinit var languageSearch: EditText
     private lateinit var languageList: LinearLayout
@@ -94,6 +95,7 @@ class OverlayBubbleService : Service() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var restartRunnable: Runnable? = null
     private var longPressRunnable: Runnable? = null
+    private var pasteHintRunnable: Runnable? = null
     private var glowAnimator: ValueAnimator? = null
 
     override fun onCreate() {
@@ -116,6 +118,7 @@ class OverlayBubbleService : Service() {
         isRunning = false
         restartRunnable?.let { mainHandler.removeCallbacks(it) }
         longPressRunnable?.let { mainHandler.removeCallbacks(it) }
+        pasteHintRunnable?.let { mainHandler.removeCallbacks(it) }
         glowAnimator?.cancel()
         recognizer?.destroy()
         recognizer = null
@@ -134,6 +137,7 @@ class OverlayBubbleService : Service() {
         root = inflater.inflate(R.layout.overlay_bubble, null) as FrameLayout
 
         compactBubble = root.findViewById(R.id.compactBubble)
+        pasteHint = root.findViewById(R.id.pasteHint)
         settingsPanel = root.findViewById(R.id.settingsPanel)
         languageSearch = root.findViewById(R.id.languageSearch)
         languageList = root.findViewById(R.id.languageList)
@@ -273,6 +277,8 @@ class OverlayBubbleService : Service() {
     /* ------------------------------------------------------------------ */
     private fun openSettingsPanel() {
         populateHistoryList()
+        pasteHintRunnable?.let { mainHandler.removeCallbacks(it) }
+        pasteHint.visibility = View.GONE
         compactBubble.visibility = View.GONE
         settingsPanel.visibility = View.VISIBLE
         // A text field inside an overlay needs real input focus for the IME
@@ -527,20 +533,42 @@ class OverlayBubbleService : Service() {
     }
 
     /* ------------------------------------------------------------------ */
-    /* delivering text: accessibility injection first, clipboard always    */
+    /* delivering text: clipboard, plus a transient "paste" reminder       */
     /* ------------------------------------------------------------------ */
     private fun deliverFinalText(text: String) {
-        TalkToTextAccessibilityService.instance?.insertTextIntoFocusedField("$text ")
-        // The clipboard is kept in sync regardless of whether injection
-        // succeeded - it's the guaranteed fallback the user can always paste
-        // from, matching how the Windows/Chrome builds behave.
         autoCopyToClipboard(text)
+        showPasteHint()
     }
 
     private fun autoCopyToClipboard(text: String) {
         if (text.isBlank()) return
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("Talk-To-Text", text))
+    }
+
+    private fun showPasteHint() {
+        if (compactBubble.visibility != View.VISIBLE) return // don't pop it over the settings panel
+        pasteHintRunnable?.let { mainHandler.removeCallbacks(it) }
+        // Keep the hint on-screen: show it on whichever side of the bubble
+        // has room, instead of always the same side and sometimes running
+        // off the edge of the display.
+        val bubbleOnRightHalf = (params.x + compactBubble.width / 2) > screenWidthPx() / 2
+        val lp = pasteHint.layoutParams as FrameLayout.LayoutParams
+        if (bubbleOnRightHalf) {
+            lp.gravity = Gravity.TOP or Gravity.END
+            lp.marginEnd = dp(56)
+            lp.marginStart = 0
+        } else {
+            lp.gravity = Gravity.TOP or Gravity.START
+            lp.marginStart = dp(56)
+            lp.marginEnd = 0
+        }
+        pasteHint.layoutParams = lp
+        pasteHint.visibility = View.VISIBLE
+        clampIntoScreen()
+        val r = Runnable { pasteHint.visibility = View.GONE; clampIntoScreen() }
+        pasteHintRunnable = r
+        mainHandler.postDelayed(r, 4000)
     }
 
     /* ------------------------------------------------------------------ */

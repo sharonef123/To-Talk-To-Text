@@ -6,9 +6,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.accessibilityservice.AccessibilityServiceInfo
 import android.provider.Settings
-import android.view.accessibility.AccessibilityManager
 import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
@@ -20,11 +18,17 @@ import androidx.core.os.LocaleListCompat
 
 /**
  * Onboarding / control screen. No full-screen speech dialog lives here (or
- * anywhere in the app) - this screen's only job is getting the permissions
- * the floating bubble needs, then starting or stopping it. Defaults to
- * Hebrew (see values/strings.xml); the top-bar button switches to English
- * via AppCompatDelegate's per-app language override, independent of the
- * device's system locale.
+ * anywhere in the app) - this screen's only job is getting the two
+ * permissions the floating bubble needs (overlay + microphone), then
+ * starting or stopping it. Defaults to Hebrew (see values/strings.xml); the
+ * top-bar button switches to English via AppCompatDelegate's per-app
+ * language override, independent of the device's system locale.
+ *
+ * There is deliberately no AccessibilityService anywhere in this app:
+ * Google Play Protect (and most sideload scanners) flag apps that declare
+ * BIND_ACCESSIBILITY_SERVICE heavily, since it's the same capability real
+ * malware abuses to read/inject into other apps' screens. Delivery is
+ * clipboard-only - see OverlayBubbleService.
  */
 class MainActivity : AppCompatActivity() {
 
@@ -33,8 +37,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var overlayButton: Button
     private lateinit var micStatus: TextView
     private lateinit var micButton: Button
-    private lateinit var accessStatus: TextView
-    private lateinit var accessButton: Button
     private lateinit var startBubbleButton: Button
 
     private val micPermissionLauncher = registerForActivityResult(
@@ -50,14 +52,11 @@ class MainActivity : AppCompatActivity() {
         overlayButton = findViewById(R.id.overlayButton)
         micStatus = findViewById(R.id.micStatus)
         micButton = findViewById(R.id.micButton)
-        accessStatus = findViewById(R.id.accessStatus)
-        accessButton = findViewById(R.id.accessButton)
         startBubbleButton = findViewById(R.id.startBubbleButton)
 
         langToggleButton.setOnClickListener { toggleLanguage() }
         overlayButton.setOnClickListener { requestOverlayPermission() }
         micButton.setOnClickListener { requestMicPermission() }
-        accessButton.setOnClickListener { requestAccessibilityPermission() }
         startBubbleButton.setOnClickListener { toggleBubble() }
     }
 
@@ -80,14 +79,6 @@ class MainActivity : AppCompatActivity() {
         ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED
 
-    private fun hasAccessibilityPermission(): Boolean {
-        val manager = getSystemService(ACCESSIBILITY_SERVICE) as AccessibilityManager
-        val enabled = manager.getEnabledAccessibilityServiceList(
-            AccessibilityServiceInfo.FEEDBACK_ALL_MASK
-        )
-        return enabled.any { it.resolveInfo.serviceInfo.packageName == packageName }
-    }
-
     private fun requestOverlayPermission() {
         val intent = Intent(
             Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -104,12 +95,6 @@ class MainActivity : AppCompatActivity() {
         micPermissionLauncher.launch(perms.toTypedArray())
     }
 
-    private fun requestAccessibilityPermission() {
-        // There is no programmatic "grant" for an AccessibilityService - the
-        // user has to flip it on in system Settings themselves.
-        startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-    }
-
     private fun refreshPermissionState() {
         val overlayGranted = hasOverlayPermission()
         overlayStatus.text = getString(
@@ -123,14 +108,6 @@ class MainActivity : AppCompatActivity() {
         )
         micButton.isEnabled = !micGranted
 
-        val accessGranted = hasAccessibilityPermission()
-        accessStatus.text = getString(
-            if (accessGranted) R.string.perm_access_granted else R.string.perm_access_action
-        )
-        accessButton.isEnabled = !accessGranted
-
-        // Direct text injection is a bonus, not a hard requirement (the
-        // clipboard always works), so only overlay + mic gate starting the bubble.
         val canStart = overlayGranted && micGranted
         startBubbleButton.isEnabled = canStart
         startBubbleButton.setText(

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package the Chrome extension into dist/chrome/.
+"""Package the Chrome extension (source lives in chrome/) into dist/chrome/.
 
 Produces, directly inside an isolated dist/chrome/ directory:
   - Talk-To-Text-(By-Efroni)-Chrome-Extension.zip  (for the Chrome Web Store)
@@ -16,6 +16,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+SRC = ROOT / "chrome"
 DIST_CHROME = ROOT / "dist" / "chrome"
 OUT = DIST_CHROME / "Talk-To-Text-(By-Efroni)-Chrome-Extension.zip"
 FILES = ["manifest.json", "background.js", "content.js"]
@@ -23,7 +24,7 @@ DIRS = ["icons"]
 
 
 def main() -> None:
-    manifest = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads((SRC / "manifest.json").read_text(encoding="utf-8"))
 
     if DIST_CHROME.exists():
         shutil.rmtree(DIST_CHROME)
@@ -31,16 +32,16 @@ def main() -> None:
 
     with zipfile.ZipFile(OUT, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for name in FILES:
-            zf.write(ROOT / name, name)
+            zf.write(SRC / name, name)
         for d in DIRS:
-            for path in sorted((ROOT / d).rglob("*")):
+            for path in sorted((SRC / d).rglob("*")):
                 if path.is_file():
-                    zf.write(path, path.relative_to(ROOT).as_posix())
+                    zf.write(path, path.relative_to(SRC).as_posix())
 
     for name in FILES:
-        shutil.copy2(ROOT / name, DIST_CHROME / name)
+        shutil.copy2(SRC / name, DIST_CHROME / name)
     for d in DIRS:
-        shutil.copytree(ROOT / d, DIST_CHROME / d)
+        shutil.copytree(SRC / d, DIST_CHROME / d)
 
     print(f"Built {OUT} (v{manifest['version']}, {OUT.stat().st_size} bytes)")
     print(f"Unpacked extension ready to load directly from {DIST_CHROME}")

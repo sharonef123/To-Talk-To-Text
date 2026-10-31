@@ -16,6 +16,7 @@ via the clipboard and a Ctrl+V keystroke; the previous clipboard contents are
 restored afterwards.
 """
 
+import ctypes
 import sys
 import threading
 import time
@@ -26,6 +27,10 @@ import numpy as np
 import pyperclip
 import sounddevice as sd
 import speech_recognition as sr
+
+# Win32 API constants for making the pill a true "never steals focus" window.
+GWL_EXSTYLE = -20
+WS_EX_NOACTIVATE = 0x08000000
 
 SAMPLE_RATE = 16000
 LANGUAGES = {"en": "English", "he": "Hebrew"}
@@ -51,6 +56,10 @@ _recording = False
 _frames: list[np.ndarray] = []
 _stream: sd.InputStream | None = None
 _language = "en"
+# The window that was in the foreground right before dictation started - the
+# pill is WS_EX_NOACTIVATE so clicking it should never change this, but a
+# window handle is cheap insurance before each paste regardless.
+_target_hwnd = 0
 
 pill: "Pill | None" = None
 
@@ -61,11 +70,64 @@ def log(msg: str) -> None:
 
 def notify_error(msg: str) -> None:
     """Blocking message box - reserved for real errors the user must see."""
-    import ctypes
     threading.Thread(
         target=lambda: ctypes.windll.user32.MessageBoxW(0, msg, APP_TITLE, 0x10),
         daemon=True,
     ).start()
+
+
+GA_ROOT = 2
+
+_user32 = ctypes.WinDLL("user32", use_last_error=True)
+_user32.GetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int]
+_user32.GetWindowLongW.restype = ctypes.c_long
+_user32.SetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_long]
+_user32.SetWindowLongW.restype = ctypes.c_long
+_user32.GetAncestor.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+_user32.GetAncestor.restype = ctypes.c_void_p
+
+
+def apply_noactivate(hwnd: int) -> None:
+    """Set WS_EX_NOACTIVATE on the real top-level window containing `hwnd`
+    so clicking the pill never steals keyboard focus / foreground-window
+    status from whatever app the user was just typing into (Notepad, Word,
+    a browser, ...). Mouse clicks on the pill's own buttons still work fine -
+    this only blocks *activation*, not input.
+
+    Tk's winfo_id() on Windows returns the HWND of the client drawing-area
+    window, not the actual decorated/overrideredirect top-level frame - the
+    one that actually carries WS_EX_TOPMOST/WS_EX_TOOLWINDOW - so this walks
+    up to that real ancestor via GetAncestor(GA_ROOT) first.
+    """
+    try:
+        top_hwnd = _user32.GetAncestor(hwnd, GA_ROOT) or hwnd
+        ctypes.set_last_error(0)
+        style = _user32.GetWindowLongW(top_hwnd, GWL_EXSTYLE)
+        new_style = style | WS_EX_NOACTIVATE
+        result = _user32.SetWindowLongW(top_hwnd, GWL_EXSTYLE, new_style)
+        err = ctypes.get_last_error()
+        if result == 0 and err != 0:
+            log(f"SetWindowLongW failed: error {err}")
+        else:
+            log(f"Applied WS_EX_NOACTIVATE to hwnd={top_hwnd} (0x{style & 0xffffffff:08x} -> 0x{new_style & 0xffffffff:08x})")
+    except Exception as exc:
+        log(f"Could not apply WS_EX_NOACTIVATE: {exc}")
+
+
+def foreground_window() -> int:
+    try:
+        return ctypes.windll.user32.GetForegroundWindow()
+    except Exception:
+        return 0
+
+
+def restore_foreground_window(hwnd: int) -> None:
+    if not hwnd:
+        return
+    try:
+        ctypes.windll.user32.SetForegroundWindow(hwnd)
+    except Exception:
+        pass
 
 
 def ui_call(fn) -> None:
@@ -133,6 +195,14 @@ class Pill:
 
         self.root.update_idletasks()
         self._place_bottom_right()
+        # Tk's own window-management calls (wm overrideredirect, geometry,
+        # topmost) can clobber a custom ex-style bit set too early, so this
+        # is applied (and re-applied - see show()) once the event loop is
+        # idle rather than synchronously here.
+        self.root.after(150, self._apply_noactivate)
+
+    def _apply_noactivate(self) -> None:
+        apply_noactivate(self.root.winfo_id())
 
     def _place_bottom_right(self) -> None:
         w = self.root.winfo_reqwidth()
@@ -171,6 +241,8 @@ class Pill:
         self.root.deiconify()
         if self.minimized:
             self.toggle_minimize()
+        # deiconify() can reset window-manager-level ex-styles.
+        self.root.after(50, self._apply_noactivate)
 
     def set_recording(self, recording: bool) -> None:
         self.mic_canvas.itemconfig(self.mic_oval, fill=COLOR_MIC_ON if recording else COLOR_MIC_IDLE)
@@ -196,7 +268,8 @@ def _audio_callback(indata, frames, time_info, status_flags) -> None:
 
 
 def start_recording() -> None:
-    global _recording, _stream
+    global _recording, _stream, _target_hwnd
+    _target_hwnd = foreground_window()
     with _state_lock:
         if _recording:
             return
@@ -265,6 +338,11 @@ def type_text(text: str) -> None:
     except Exception:
         previous = None
     pyperclip.copy(text)
+    # The pill is WS_EX_NOACTIVATE so it should never have taken the
+    # foreground in the first place, but restore it explicitly before
+    # pasting regardless - cheap insurance against anything else (a
+    # notification, another app) having grabbed it in the meantime.
+    restore_foreground_window(_target_hwnd)
     time.sleep(0.05)
     keyboard.send("ctrl+v")
     time.sleep(0.25)

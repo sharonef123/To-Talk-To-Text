@@ -3,11 +3,12 @@
   Single root the service adds to the WindowManager. The compact bubble is
   the ONLY persistent control - a single tap starts/stops recording right
   there (the whole circle glows red while listening), a long-press opens the
-  settings panel (language + history + close), and dragging moves it. Only
-  one of {compactBubble, settingsPanel} is VISIBLE at a time; the other is
-  GONE (not INVISIBLE) so the root's wrap_content size - and so the overlay
-  window's actual touchable footprint - shrinks back to just the bubble
-  whenever the panel isn't open.
+  settings panel (language + history + close), and dragging moves it.
+  compactBubble and settingsPanel are mutually exclusive (one GONE, not
+  INVISIBLE, whenever the other is VISIBLE) so the root's wrap_content size -
+  and so the overlay window's actual touchable footprint - shrinks back to
+  just the bubble whenever the panel isn't open. pasteHint is a small
+  transient extra shown alongside the bubble for a few seconds at a time.
 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/overlayRoot"
@@ -29,6 +30,28 @@
             android:src="@mipmap/ic_launcher"
             android:contentDescription="@string/bubble_compact_desc" />
     </FrameLayout>
+
+    <!-- Transient "paste" hint shown for ~4s next to the bubble after a
+         finalized transcript is copied to the clipboard - purely
+         informational (there is no AccessibilityService in this app to
+         paste on the user's behalf), reminding them the text is ready. -->
+    <TextView
+        android:id="@+id/pasteHint"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|start"
+        android:background="@drawable/chip_bg"
+        android:backgroundTint="@color/ttt_accent"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp"
+        android:textColor="#FFFFFF"
+        android:textSize="12sp"
+        android:textStyle="bold"
+        android:text="@string/paste_hint"
+        android:elevation="7dp"
+        android:visibility="gone" />
 
     <!-- Settings panel: language picker + transcript history + close bubble. -->
     <LinearLayout

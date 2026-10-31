@@ -16,10 +16,6 @@
   // After these, no separating space is needed.
   const TRAILING_OK = /[.!?,;:…”"’')\]}]$/;
   const HISTORY_LIMIT = 20;
-  // How long a just-clicked field stays "pinned" as the dictation target even if
-  // document.activeElement briefly disagrees (split layouts / frameworks that
-  // reassign focus asynchronously after pointerdown).
-  const PIN_TTL_MS = 400;
   // Window after a session restart (or a frozen/dead segment) during which the
   // engine may echo the tail of the already-sealed utterance; used to drop
   // duplicate text outright rather than trying to patch it in place.
@@ -39,8 +35,7 @@
     errStreak: 0,
     lastFinalText: '',
     lastFinalAt: 0,
-    pinned: null,
-    pinnedAt: 0,
+    targetElement: null,
     history: [],   // [{ text, ts }], newest first, capped at HISTORY_LIMIT
   };
 
@@ -78,15 +73,40 @@
     return isEditable(el) ? el : null;
   }
 
+  // The single source of truth for "where does dictated text go". A real
+  // editable element that is genuinely focused always wins (and becomes the
+  // new target, so Tab-navigation and programmatic focus changes keep
+  // working). The important case this exists for: clicking OUR OWN mic
+  // button moves document.activeElement to the pill's shadow host, which is
+  // not editable - without a sticky fallback, dictated text would silently
+  // go nowhere the instant the user starts recording by clicking the pill.
+  // state.targetElement therefore has no expiry; it only changes when a
+  // different real field is clicked or focused (see handlePointerDown and
+  // the focusin listener below).
   function currentEditable() {
-    if (state.pinned && state.pinned.isConnected && isEditable(state.pinned)) {
-      if (Date.now() - state.pinnedAt < PIN_TTL_MS) return state.pinned;
-      // Pin expired: still prefer it over a stale/foreign activeElement, but
-      // only while it genuinely still has focus.
-      if (document.activeElement === state.pinned) return state.pinned;
+    const active = document.activeElement;
+    if (isEditable(active)) {
+      state.targetElement = active;
+      return active;
     }
-    const el = document.activeElement;
-    return isEditable(el) ? el : null;
+    if (state.targetElement && state.targetElement.isConnected && isEditable(state.targetElement)) {
+      return state.targetElement;
+    }
+    return null;
+  }
+
+  // Bring the dictation target back into real DOM focus - used right when
+  // the mic button is clicked, so typing resumes immediately instead of
+  // waiting for the user to manually click back into the field.
+  function restoreTargetFocus() {
+    const el = state.targetElement;
+    if (el && el.isConnected && isEditable(el) && document.activeElement !== el) {
+      try {
+        el.focus({ preventScroll: true });
+      } catch (_) {
+        /* ignore */
+      }
+    }
   }
 
   function cursorPos(el) {
@@ -125,10 +145,15 @@
   }
 
   function handlePointerDown(e) {
+    // Clicks on our own pill/drawer must never change the dictation target -
+    // document.elementFromPoint at that spot resolves to the shadow host
+    // (not editable), which would otherwise wipe out whatever field the user
+    // was just dictating into the instant they tap the mic button.
+    if (e.target === ui.host) return;
     const el = editableAtPoint(e.clientX, e.clientY);
-    state.pinned = el;
-    state.pinnedAt = el ? Date.now() : 0;
-    if (el) pinCaretAt(el, e.clientX, e.clientY);
+    if (!el) return; // a click elsewhere on the page (not a field) leaves the target as-is
+    state.targetElement = el;
+    pinCaretAt(el, e.clientX, e.clientY);
   }
 
   document.addEventListener('pointerdown', handlePointerDown, true);
@@ -625,6 +650,10 @@
       render();
       return;
     }
+    // Clicking the mic button moved document.activeElement to the pill
+    // itself; hand real focus back to the dictation target right away so
+    // typing lands there from the very first result instead of nowhere.
+    restoreTargetFocus();
     state.active = true;
     state.error = '';
     state.hint = '';
