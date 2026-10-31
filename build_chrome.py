@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package the Chrome extension into dist/To-Talk-To-Text-Chrome.zip.
+"""Package the Chrome extension into dist/Talk-To-Text-(By-Efroni)-Chrome-Extension.zip.
 
 Usage:  python build_chrome.py
 """
@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 DIST = ROOT / "dist"
-OUT = DIST / "To-Talk-To-Text-Chrome.zip"
+OUT = DIST / "Talk-To-Text-(By-Efroni)-Chrome-Extension.zip"
 FILES = ["manifest.json", "background.js", "content.js"]
 DIRS = ["icons"]
 

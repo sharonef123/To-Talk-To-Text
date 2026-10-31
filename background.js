@@ -1,4 +1,4 @@
-// Quiet Dictation — MV3 service worker.
+// Talk→To→Text (By Efroni) — MV3 service worker.
 // Its only jobs: route user commands to the active tab and mirror state on the badge.
 
 function setBadge(active) {
@@ -39,5 +39,5 @@ chrome.commands.onCommand.addListener((command, tab) => {
 });
 
 chrome.runtime.onMessage.addListener((msg) => {
-  if (msg && msg.type === 'qd-state') setBadge(!!msg.active);
+  if (msg && msg.type === 'ttt-state') setBadge(!!msg.active);
 });

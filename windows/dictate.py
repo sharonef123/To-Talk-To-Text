@@ -1,4 +1,4 @@
-"""To Talk To Text (By Efroni) - Windows 11 background dictation.
+"""Talk→To→Text (By Efroni) - Windows 11 background dictation.
 
 - Ctrl+Shift+Space  : start / stop recording. On stop, the audio is transcribed
                       locally and typed into the focused window.
@@ -38,13 +38,16 @@ _model: WhisperModel | None = None
 
 
 def log(msg: str) -> None:
-    print(f"[dictate] {msg}", flush=True)
+    # Plain ASCII arrow here: --windowed builds have no real console, and when
+    # run from source some Windows terminals are still on a legacy codepage
+    # that can't encode the brand glyph (U+2192).
+    print(f"[Talk-To-Text] {msg}", flush=True)
 
 
 def notify(msg: str) -> None:
     """Show a small message box without blocking the hotkey thread."""
     threading.Thread(
-        target=lambda: ctypes.windll.user32.MessageBoxW(0, msg, "To Talk To Text", 0x40),
+        target=lambda: ctypes.windll.user32.MessageBoxW(0, msg, "Talk→To→Text (By Efroni)", 0x40),
         daemon=True,
     ).start()
 
@@ -145,7 +148,7 @@ def toggle_language() -> None:
 
 
 def main() -> None:
-    log("To Talk To Text running.")
+    log("Talk-To-Text (By Efroni) running.")
     log(f"{HOTKEY_TOGGLE}: start/stop | {HOTKEY_LANGUAGE}: language | {HOTKEY_QUIT}: quit")
     keyboard.add_hotkey(HOTKEY_TOGGLE, toggle_recording, suppress=True)
     keyboard.add_hotkey(HOTKEY_LANGUAGE, toggle_language, suppress=True)

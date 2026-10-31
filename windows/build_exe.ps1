@@ -1,4 +1,5 @@
-# Build dist/To-Talk-To-Text-Windows.exe (single portable file, icon bundled).
+# Build dist/Talk-To-Text-(By-Efroni)-Windows-Desktop.exe (single portable
+# file, icon bundled).
 # Usage (from the project root):  powershell -ExecutionPolicy Bypass -File windows\build_exe.ps1
 
 $ErrorActionPreference = "Stop"
@@ -7,6 +8,7 @@ $Win = Join-Path $Root "windows"
 $Build = Join-Path $Root "build\windows"
 $Dist = Join-Path $Root "dist"
 $Icon = Join-Path $Build "app.ico"
+$AppName = "Talk-To-Text-(By-Efroni)-Windows-Desktop"
 
 # Resolve a real Python interpreter. On many Windows machines the bare `python`
 # command resolves to the Microsoft Store "App Execution Alias" stub (not a real
@@ -54,7 +56,7 @@ foreach ($m in $ExcludeModules) { $ExcludeArgs += @("--exclude-module", $m) }
 $PyInstallerArgs = @(
     "-m", "PyInstaller",
     "--noconfirm", "--onefile", "--windowed",
-    "--name", "To-Talk-To-Text-Windows",
+    "--name", $AppName,
     "--icon", $Icon,
     "--distpath", $Dist,
     "--workpath", (Join-Path $Build "work"),
@@ -67,7 +69,7 @@ $PyInstallerArgs += (Join-Path $Win "dictate.py")
 
 Invoke-Python $PyInstallerArgs
 
-$ExePath = Join-Path $Dist "To-Talk-To-Text-Windows.exe"
+$ExePath = Join-Path $Dist "$AppName.exe"
 if (-not (Test-Path $ExePath)) {
     throw "Build reported success but $ExePath was not found."
 }

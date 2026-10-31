@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ttt_surface">#14171C</color>
+    <color name="ttt_surface_border">#2A2E35</color>
+    <color name="ttt_accent">#4C8BF5</color>
+    <color name="ttt_recording">#C9343A</color>
+    <color name="ttt_text_primary">#E6E8EB</color>
+    <color name="ttt_text_muted">#9AA1AB</color>
+    <color name="ttt_chip_bg">#1F2329</color>
+</resources>

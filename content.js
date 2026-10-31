@@ -1,11 +1,11 @@
-// Quiet Dictation — content script.
+// Talk→To→Text (By Efroni) — content script.
 // Runs recognition in the page, writes transcripts at the caret, and renders a
 // single self-contained floating pill (shadow DOM, so page CSS cannot touch it).
 
 (() => {
   'use strict';
-  if (window.__quietDictation) return;
-  window.__quietDictation = true;
+  if (window.__talkToText) return;
+  window.__talkToText = true;
 
   /* ------------------------------------------------------------------ */
   /* config                                                              */
@@ -15,6 +15,14 @@
   const FIELD_TYPES = new Set(['text', 'search', 'url', 'tel', 'email']);
   // After these, no separating space is needed.
   const TRAILING_OK = /[.!?,;:…”"’')\]}]$/;
+  const HISTORY_LIMIT = 20;
+  // How long a just-clicked field stays "pinned" as the dictation target even if
+  // document.activeElement briefly disagrees (split layouts / frameworks that
+  // reassign focus asynchronously after pointerdown).
+  const PIN_TTL_MS = 400;
+  // Window after a session restart during which the engine may echo the tail of
+  // the previous, already-sealed utterance; used to suppress duplicate text.
+  const RESTART_ECHO_MS = 3000;
 
   const state = {
     active: false,
@@ -29,9 +37,15 @@
     running: false,
     timer: 0,
     errStreak: 0,
+    freshSession: false,
+    lastFinalText: '',
+    lastFinalAt: 0,
+    pinned: null,
+    pinnedAt: 0,
+    history: [],   // [{ text, ts }], newest first, capped at HISTORY_LIMIT
   };
 
-  const ui = { ready: false };
+  const ui = { ready: false, drawerOpen: false };
 
   /* ------------------------------------------------------------------ */
   /* helpers: editing targets                                            */
@@ -51,7 +65,27 @@
     return !!el.isContentEditable;
   }
 
+  // Resolve the exact field under a point, independent of focus bookkeeping —
+  // the authoritative check for "which field did the user click" in layouts
+  // where multiple editable surfaces are visible at once (split panes, embedded
+  // frames rendered in the same document, overlapping widgets).
+  function editableAtPoint(x, y) {
+    let el;
+    try {
+      el = document.elementFromPoint(x, y);
+    } catch (_) {
+      return null;
+    }
+    return isEditable(el) ? el : null;
+  }
+
   function currentEditable() {
+    if (state.pinned && state.pinned.isConnected && isEditable(state.pinned)) {
+      if (Date.now() - state.pinnedAt < PIN_TTL_MS) return state.pinned;
+      // Pin expired: still prefer it over a stale/foreign activeElement, but
+      // only while it genuinely still has focus.
+      if (document.activeElement === state.pinned) return state.pinned;
+    }
     const el = document.activeElement;
     return isEditable(el) ? el : null;
   }
@@ -72,6 +106,34 @@
     const desc = Object.getOwnPropertyDescriptor(proto.prototype, 'value');
     return desc && desc.set ? desc.set : null;
   }
+
+  /* ------------------------------------------------------------------ */
+  /* helpers: pointer → caret pinning                                     */
+  /* ------------------------------------------------------------------ */
+  function pinCaretAt(el, x, y) {
+    if (isFormField(el)) return; // the browser already places the caret correctly
+    if (!document.caretRangeFromPoint) return;
+    try {
+      const range = document.caretRangeFromPoint(x, y);
+      if (!range || !el.contains(range.startContainer)) return;
+      const sel = window.getSelection();
+      if (!sel) return;
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  function handlePointerDown(e) {
+    const el = editableAtPoint(e.clientX, e.clientY);
+    state.pinned = el;
+    state.pinnedAt = el ? Date.now() : 0;
+    if (el) pinCaretAt(el, e.clientX, e.clientY);
+  }
+
+  document.addEventListener('pointerdown', handlePointerDown, true);
+  document.addEventListener('mousedown', handlePointerDown, true);
 
   /* ------------------------------------------------------------------ */
   /* helpers: ranges (contenteditable)                                   */
@@ -150,6 +212,20 @@
     }
   }
 
+  // Fired once a segment is sealed (isFinal), on top of whatever native
+  // input/beforeinput events execCommand or the setter path already raised.
+  // React's controlled inputs key off the patched value-setter + 'input'
+  // combo (already covered below); Vue 2/3 and plain <form> validation also
+  // listen for 'change' on commit, which neither execCommand nor a manual
+  // value-set otherwise raises.
+  function fireChange(el) {
+    try {
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
   /* ------------------------------------------------------------------ */
   /* helpers: spacing                                                    */
   /* ------------------------------------------------------------------ */
@@ -189,7 +265,7 @@
   // Rich-text editors turn plain spaces into U+00A0, so compare leniently.
   function sameText(a, b) {
     if (a === b) return true;
-    return a.replace(/\u00A0/g, ' ') === b.replace(/\u00A0/g, ' ');
+    return a.replace(/ /g, ' ') === b.replace(/ /g, ' ');
   }
 
   // The character in front of an existing segment — it never moves while the
@@ -207,6 +283,40 @@
       /* ignore */
     }
     return '';
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* helpers: dedup across a restarted recognition session                */
+  /* ------------------------------------------------------------------ */
+  // Some engines re-emit a bit of the previous utterance's tail right after an
+  // automatic reconnect (the audio buffer overlaps the restart boundary). Strip
+  // any such overlap against the last phrase we already sealed into the page.
+  function stripRestartEcho(text) {
+    if (!state.lastFinalText) return text;
+    if (Date.now() - state.lastFinalAt > RESTART_ECHO_MS) return text;
+
+    const last = state.lastFinalText.trim();
+    if (!last) return text;
+    const normLast = last.toLowerCase();
+    const normIncoming = text.toLowerCase();
+
+    if (normIncoming === normLast) return '';
+    if (normIncoming.startsWith(normLast)) {
+      return text.slice(last.length).replace(/^\s+/, '');
+    }
+
+    // Partial word-level overlap (engine clipped the boundary slightly
+    // differently): compare the last few words of what we sealed against the
+    // first few words of what just came in.
+    const lastWords = normLast.split(/\s+/);
+    const incWords = text.split(/\s+/);
+    const maxCheck = Math.min(lastWords.length, incWords.length, 6);
+    for (let k = maxCheck; k > 0; k--) {
+      const a = lastWords.slice(-k).join(' ');
+      const b = incWords.slice(0, k).join(' ').toLowerCase();
+      if (a === b) return incWords.slice(k).join(' ');
+    }
+    return text;
   }
 
   /* ------------------------------------------------------------------ */
@@ -335,6 +445,7 @@
         return;
       }
       state.prov = isFinal ? null : seg;
+      if (isFinal) fireChange(el);
       render();
       return;
     }
@@ -343,7 +454,10 @@
     if (seg.kind === 'f') writeField(seg, withSpace);
     else writeEditable(seg, withSpace);
 
-    if (isFinal) state.prov = null;
+    if (isFinal) {
+      state.prov = null;
+      fireChange(seg.el);
+    }
     render();
   }
 
@@ -353,6 +467,43 @@
     const text = state.buffer;
     state.buffer = '';
     putText(text, true);
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* history (clipboard drawer)                                          */
+  /* ------------------------------------------------------------------ */
+  function addHistory(text) {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    state.history.unshift({ text: trimmed, ts: Date.now() });
+    if (state.history.length > HISTORY_LIMIT) state.history.length = HISTORY_LIMIT;
+    renderHistory();
+    try {
+      chrome.storage.local.set({ history: state.history });
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  async function copyToClipboard(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (_) {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand('copy');
+        ta.remove();
+        return ok;
+      } catch (_) {
+        return false;
+      }
+    }
   }
 
   /* ------------------------------------------------------------------ */
@@ -381,7 +532,19 @@
         if (item.isFinal) final += text;
         else interim += text;
       }
-      if (final) putText(final, true);
+
+      if (state.freshSession) {
+        state.freshSession = false;
+        if (final) final = stripRestartEcho(final);
+        else if (interim) interim = stripRestartEcho(interim);
+      }
+
+      if (final) {
+        putText(final, true);
+        state.lastFinalText = final.trim();
+        state.lastFinalAt = Date.now();
+        addHistory(final);
+      }
       state.interim = interim;
       if (interim) putText(interim, false);
       render();
@@ -429,6 +592,7 @@
     if (!state.rec) state.rec = createRecognition();
     if (!state.rec) return;
     state.rec.lang = state.lang;
+    state.freshSession = true;
     try {
       state.rec.start();
       state.running = true;
@@ -522,7 +686,7 @@
 
   function syncBadge() {
     try {
-      const p = chrome.runtime.sendMessage({ type: 'qd-state', active: state.active });
+      const p = chrome.runtime.sendMessage({ type: 'ttt-state', active: state.active });
       if (p && typeof p.catch === 'function') p.catch(() => {});
     } catch (_) {
       /* ignore */
@@ -544,7 +708,7 @@
   z-index: 2147483647;
   pointer-events: none;
 }
-.qd-root {
+.ttt-root {
   position: fixed;
   right: 16px;
   bottom: 16px;
@@ -554,7 +718,7 @@
   color: #e6e8eb;
   -webkit-font-smoothing: antialiased;
 }
-.qd-pill {
+.ttt-pill {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -566,9 +730,10 @@
   pointer-events: auto;
   user-select: none;
   -webkit-user-select: none;
-  cursor: default;
+  cursor: grab;
 }
-.qd-btn {
+.ttt-pill.dragging { cursor: grabbing; }
+.ttt-btn {
   all: unset;
   box-sizing: border-box;
   display: inline-flex;
@@ -577,24 +742,24 @@
   cursor: pointer;
   color: inherit;
 }
-.qd-mic {
+.ttt-mic {
   width: 30px;
   height: 30px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.08);
 }
-.qd-mic:hover { background: rgba(255, 255, 255, 0.16); }
-.qd-mic.on { background: #c9343a; color: #ffffff; }
-.qd-mic.on svg { animation: qd-blink 1.6s ease-in-out infinite; }
-@keyframes qd-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-.qd-langs {
+.ttt-mic:hover { background: rgba(255, 255, 255, 0.16); }
+.ttt-mic.on { background: #c9343a; color: #ffffff; }
+.ttt-mic.on svg { animation: ttt-blink 1.6s ease-in-out infinite; }
+@keyframes ttt-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+.ttt-langs {
   display: flex;
   gap: 2px;
   padding: 2px;
   background: rgba(255, 255, 255, 0.07);
   border-radius: 999px;
 }
-.qd-lang {
+.ttt-lang {
   padding: 4px 9px;
   border-radius: 999px;
   font-size: 11px;
@@ -602,15 +767,15 @@
   letter-spacing: 0.04em;
   color: #9aa1ab;
 }
-.qd-lang:hover { color: #e6e8eb; }
-.qd-lang.on { background: #f4f6f7; color: #14171c; }
-.qd-sep {
+.ttt-lang:hover { color: #e6e8eb; }
+.ttt-lang.on { background: #f4f6f7; color: #14171c; }
+.ttt-sep {
   width: 1px;
   align-self: stretch;
   margin: 3px 0;
   background: rgba(255, 255, 255, 0.14);
 }
-.qd-text {
+.ttt-text {
   display: none;
   max-width: min(48vw, 320px);
   white-space: nowrap;
@@ -620,8 +785,71 @@
   line-height: 1.4;
   color: #b9bfc7;
 }
-.qd-root.open .qd-text { display: block; }
-.qd-text.err { color: #ff9b9b; }
+.ttt-root.open .ttt-text { display: block; }
+.ttt-text.err { color: #ff9b9b; }
+.ttt-chevron {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  color: #9aa1ab;
+  flex-shrink: 0;
+}
+.ttt-chevron:hover { background: rgba(255, 255, 255, 0.1); color: #e6e8eb; }
+.ttt-chevron svg { transition: transform 0.15s ease; }
+.ttt-chevron.open svg { transform: rotate(180deg); }
+.ttt-drawer {
+  display: none;
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 10px);
+  width: 300px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: #14171c;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 14px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.34);
+  pointer-events: auto;
+}
+.ttt-root.flip .ttt-drawer { bottom: auto; top: calc(100% + 10px); }
+.ttt-drawer.open { display: block; }
+.ttt-drawer-empty {
+  padding: 18px 14px;
+  color: #6b7280;
+  font-size: 12px;
+  text-align: center;
+}
+.ttt-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.ttt-item:last-child { border-bottom: none; }
+.ttt-item-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #d7dade;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  dir: auto;
+}
+.ttt-copy {
+  flex-shrink: 0;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.08);
+  color: #d7dade;
+}
+.ttt-copy:hover { background: rgba(255, 255, 255, 0.16); }
+.ttt-copy.copied { background: #1e8e5a; color: #fff; }
 `;
 
   const MIC_SVG = `
@@ -633,24 +861,32 @@
   <path d="M8.5 21h7"></path>
 </svg>`;
 
+  const CHEVRON_SVG = `
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+     stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <path d="M6 9l6 6 6-6"></path>
+</svg>`;
+
   function buildUI() {
     if (ui.ready) return;
     const host = document.createElement('div');
-    host.className = 'qd-dictation-host';
+    host.className = 'ttt-dictation-host';
 
     const shadow = host.attachShadow({ mode: 'open' });
     shadow.innerHTML = `
       <style>${STYLE}</style>
-      <div class="qd-root">
-        <div class="qd-pill" title="Quiet Dictation — Ctrl+Shift+S start/stop, Ctrl+Shift+L language">
-          <button class="qd-btn qd-mic" type="button" aria-pressed="false"
+      <div class="ttt-root">
+        <div class="ttt-drawer" role="region" aria-label="Recent transcriptions"></div>
+        <div class="ttt-pill" title="Talk→To→Text (By Efroni) — Ctrl+Shift+S start/stop, Ctrl+Shift+L language. Drag to move.">
+          <button class="ttt-btn ttt-mic" type="button" aria-pressed="false"
                   aria-label="Start or stop dictation">${MIC_SVG}</button>
-          <div class="qd-langs" role="group" aria-label="Recognition language">
-            <button class="qd-btn qd-lang" type="button" data-lang="en-US">EN</button>
-            <button class="qd-btn qd-lang" type="button" data-lang="he-IL">HE</button>
+          <div class="ttt-langs" role="group" aria-label="Recognition language">
+            <button class="ttt-btn ttt-lang" type="button" data-lang="en-US">EN</button>
+            <button class="ttt-btn ttt-lang" type="button" data-lang="he-IL">HE</button>
           </div>
-          <span class="qd-sep"></span>
-          <span class="qd-text" dir="auto" role="status" aria-live="polite"></span>
+          <span class="ttt-sep"></span>
+          <span class="ttt-text" dir="auto" role="status" aria-live="polite"></span>
+          <button class="ttt-btn ttt-chevron" type="button" aria-label="Show recent transcriptions" aria-expanded="false">${CHEVRON_SVG}</button>
         </div>
       </div>`;
 
@@ -661,22 +897,26 @@
     }
 
     ui.host = host;
-    ui.root = shadow.querySelector('.qd-root');
-    ui.pill = shadow.querySelector('.qd-pill');
-    ui.mic = shadow.querySelector('.qd-mic');
-    ui.text = shadow.querySelector('.qd-text');
-    ui.langs = Array.from(shadow.querySelectorAll('.qd-lang'));
+    ui.root = shadow.querySelector('.ttt-root');
+    ui.pill = shadow.querySelector('.ttt-pill');
+    ui.mic = shadow.querySelector('.ttt-mic');
+    ui.text = shadow.querySelector('.ttt-text');
+    ui.chevron = shadow.querySelector('.ttt-chevron');
+    ui.drawer = shadow.querySelector('.ttt-drawer');
+    ui.langs = Array.from(shadow.querySelectorAll('.ttt-lang'));
     ui.ready = true;
 
-    // Never steal the caret from the text field the user is typing into.
-    ui.pill.addEventListener('mousedown', (e) => {
-      if (currentEditable()) e.preventDefault();
-    });
+    wireDrag();
 
     ui.pill.addEventListener('click', (e) => {
-      const langBtn = e.target.closest && e.target.closest('.qd-lang');
+      if (ui.suppressClick) { ui.suppressClick = false; return; }
+      const langBtn = e.target.closest && e.target.closest('.ttt-lang');
       if (langBtn) {
         setLang(langBtn.dataset.lang, true);
+        return;
+      }
+      if (e.target.closest && e.target.closest('.ttt-chevron')) {
+        toggleDrawer();
         return;
       }
       toggle();
@@ -689,7 +929,141 @@
       });
     }
 
+    ui.drawer.addEventListener('click', (e) => {
+      const btn = e.target.closest && e.target.closest('.ttt-copy');
+      if (!btn) return;
+      e.stopPropagation();
+      const idx = Number(btn.dataset.idx);
+      const item = state.history[idx];
+      if (!item) return;
+      copyToClipboard(item.text).then((ok) => {
+        if (!ok) return;
+        btn.textContent = 'Copied';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.textContent = 'Copy';
+          btn.classList.remove('copied');
+        }, 1200);
+      });
+    });
+
+    restorePosition();
+    renderHistory();
     render();
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* drag to reposition, persisted across reloads                        */
+  /* ------------------------------------------------------------------ */
+  function clamp(v, min, max) { return Math.max(min, Math.min(v, max)); }
+
+  function applyPosition(left, top) {
+    ui.root.style.right = 'auto';
+    ui.root.style.bottom = 'auto';
+    ui.root.style.left = `${left}px`;
+    ui.root.style.top = `${top}px`;
+    const flip = top < window.innerHeight * 0.4;
+    ui.root.classList.toggle('flip', flip);
+  }
+
+  function savePosition(left, top) {
+    try {
+      chrome.storage.local.set({ pillPos: { left, top } });
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  function restorePosition() {
+    try {
+      chrome.storage.local.get({ pillPos: null, history: [] }, (res) => {
+        if (res && res.pillPos && Number.isFinite(res.pillPos.left) && Number.isFinite(res.pillPos.top)) {
+          applyPosition(res.pillPos.left, res.pillPos.top);
+        }
+        if (res && Array.isArray(res.history)) {
+          state.history = res.history.slice(0, HISTORY_LIMIT);
+          renderHistory();
+        }
+      });
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  function wireDrag() {
+    let drag = null;
+
+    ui.pill.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      if (e.target.closest && e.target.closest('.ttt-btn')) return;
+      if (currentEditable()) e.preventDefault(); // never steal the caret
+      const rect = ui.root.getBoundingClientRect();
+      drag = {
+        startX: e.clientX,
+        startY: e.clientY,
+        startLeft: rect.left,
+        startTop: rect.top,
+        moved: false,
+      };
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!drag) return;
+      const dx = e.clientX - drag.startX;
+      const dy = e.clientY - drag.startY;
+      if (!drag.moved && (Math.abs(dx) > 3 || Math.abs(dy) > 3)) {
+        drag.moved = true;
+        ui.pill.classList.add('dragging');
+      }
+      if (!drag.moved) return;
+      const rect = ui.root.getBoundingClientRect();
+      const maxLeft = Math.max(0, window.innerWidth - rect.width - 4);
+      const maxTop = Math.max(0, window.innerHeight - rect.height - 4);
+      applyPosition(
+        clamp(drag.startLeft + dx, 4, maxLeft),
+        clamp(drag.startTop + dy, 4, maxTop)
+      );
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (!drag) return;
+      ui.pill.classList.remove('dragging');
+      if (drag.moved) {
+        ui.suppressClick = true;
+        const rect = ui.root.getBoundingClientRect();
+        savePosition(rect.left, rect.top);
+      }
+      drag = null;
+    });
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* history drawer rendering                                            */
+  /* ------------------------------------------------------------------ */
+  function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
+  }
+
+  function renderHistory() {
+    if (!ui.ready) return;
+    if (!state.history.length) {
+      ui.drawer.innerHTML = '<div class="ttt-drawer-empty">No transcriptions yet</div>';
+      return;
+    }
+    ui.drawer.innerHTML = state.history.map((item, idx) => `
+      <div class="ttt-item">
+        <span class="ttt-item-text" dir="auto">${escapeHtml(item.text)}</span>
+        <button type="button" class="ttt-btn ttt-copy" data-idx="${idx}">Copy</button>
+      </div>`).join('');
+  }
+
+  function toggleDrawer() {
+    ui.drawerOpen = !ui.drawerOpen;
+    ui.drawer.classList.toggle('open', ui.drawerOpen);
+    ui.chevron.classList.toggle('open', ui.drawerOpen);
+    ui.chevron.setAttribute('aria-expanded', ui.drawerOpen ? 'true' : 'false');
   }
 
   let lastMessage = null;
@@ -743,8 +1117,7 @@
 
   if (chrome.storage && chrome.storage.onChanged) {
     chrome.storage.onChanged.addListener((changes, area) => {
-      if (area !== 'sync' || !changes.lang) return;
-      setLang(changes.lang.newValue, false);
+      if (area === 'sync' && changes.lang) setLang(changes.lang.newValue, false);
     });
   }
 

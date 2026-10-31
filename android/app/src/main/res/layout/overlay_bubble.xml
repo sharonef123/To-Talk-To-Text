@@ -1,0 +1,169 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Single root the service adds to the WindowManager. Only one of the three
+  direct children is visible at a time; the others are GONE (not INVISIBLE)
+  so the root FrameLayout's wrap_content size - and therefore the overlay
+  window's actual touchable/blocking footprint - shrinks back down to just
+  the compact bubble whenever the pill or language panel isn't showing.
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/overlayRoot"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content">
+
+    <!-- Compact state: ~48dp circular bubble, draggable, snaps to an edge. -->
+    <FrameLayout
+        android:id="@+id/compactBubble"
+        android:layout_width="52dp"
+        android:layout_height="52dp"
+        android:background="@drawable/bubble_circle_bg"
+        android:elevation="6dp">
+
+        <ImageView
+            android:id="@+id/compactIcon"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
+            android:layout_gravity="center"
+            android:src="@mipmap/ic_launcher"
+            android:contentDescription="@string/bubble_compact_desc" />
+
+        <View
+            android:id="@+id/compactRecDot"
+            android:layout_width="10dp"
+            android:layout_height="10dp"
+            android:layout_gravity="top|end"
+            android:layout_margin="4dp"
+            android:background="@drawable/bubble_circle_bg"
+            android:backgroundTint="@color/ttt_recording"
+            android:visibility="gone" />
+    </FrameLayout>
+
+    <!-- Expanded state: horizontal pill - mic toggle, language chip, live
+         transcript preview, copy, close (collapse back to the bubble). -->
+    <LinearLayout
+        android:id="@+id/expandedPill"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="@drawable/pill_bg"
+        android:elevation="6dp"
+        android:padding="6dp"
+        android:visibility="gone">
+
+        <FrameLayout
+            android:id="@+id/micButton"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="@drawable/mic_circle_bg">
+
+            <ImageView
+                android:id="@+id/micIcon"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_mic"
+                android:contentDescription="@string/mic_toggle_desc" />
+        </FrameLayout>
+
+        <TextView
+            android:id="@+id/langChip"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="6dp"
+            android:background="@drawable/chip_bg"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:textColor="@color/ttt_text_primary"
+            android:text="@string/lang_auto_short" />
+
+        <TextView
+            android:id="@+id/transcriptPreview"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="10dp"
+            android:layout_marginEnd="6dp"
+            android:maxWidth="180dp"
+            android:maxLines="2"
+            android:ellipsize="end"
+            android:textSize="12sp"
+            android:textColor="@color/ttt_text_muted"
+            android:text="@string/transcript_placeholder" />
+
+        <FrameLayout
+            android:id="@+id/copyButton"
+            android:layout_width="34dp"
+            android:layout_height="34dp"
+            android:background="@drawable/mic_circle_bg">
+
+            <ImageView
+                android:layout_width="18dp"
+                android:layout_height="18dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_copy"
+                android:contentDescription="@string/copy_desc" />
+        </FrameLayout>
+
+        <FrameLayout
+            android:id="@+id/collapseButton"
+            android:layout_width="30dp"
+            android:layout_height="30dp"
+            android:layout_marginStart="2dp">
+
+            <ImageView
+                android:layout_width="16dp"
+                android:layout_height="16dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_close"
+                android:contentDescription="@string/collapse_desc" />
+        </FrameLayout>
+    </LinearLayout>
+
+    <!-- Language panel: search box + scrollable list, shown over the pill. -->
+    <LinearLayout
+        android:id="@+id/languagePanel"
+        android:layout_width="260dp"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="@drawable/panel_bg"
+        android:elevation="8dp"
+        android:padding="10dp"
+        android:visibility="gone">
+
+        <EditText
+            android:id="@+id/languageSearch"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/chip_bg"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp"
+            android:textSize="13sp"
+            android:textColor="@color/ttt_text_primary"
+            android:textColorHint="@color/ttt_text_muted"
+            android:hint="@string/search_languages_hint"
+            android:inputType="text"
+            android:imeOptions="actionDone"
+            android:singleLine="true" />
+
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="260dp"
+            android:layout_marginTop="8dp"
+            android:scrollbars="vertical">
+
+            <LinearLayout
+                android:id="@+id/languageList"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+        </ScrollView>
+    </LinearLayout>
+
+</FrameLayout>
